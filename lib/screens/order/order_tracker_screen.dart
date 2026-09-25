@@ -173,14 +173,83 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fitMapBounds();
       _resolveActualLocations();
+      _updateDriverState(widget.order);
     });
 
     // Authoritative periodic backend order polling (every 3s)
-    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (mounted) {
-        context.read<OrderProvider>().fetchMyOrders();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
       }
+      await context.read<OrderProvider>().fetchMyOrders();
+      if (!mounted) return;
+      final provider = context.read<OrderProvider>();
+      final current = provider.orders.firstWhere(
+        (o) => o.id == widget.order.id,
+        orElse: () => widget.order,
+      );
+      final status = current.status.toUpperCase();
+      if (status == 'DELIVERED' || status == 'CANCELLED') {
+        timer.cancel();
+      }
+      _updateDriverState(current);
+      if (mounted) setState(() {});
     });
+  }
+
+  void _updateDriverState(OrderModel currentOrder) {
+    if (currentOrder.storeLat != null && currentOrder.storeLng != null) {
+      _storeLocation = LatLng(currentOrder.storeLat!, currentOrder.storeLng!);
+    }
+    if (currentOrder.storeName != null && currentOrder.storeName!.isNotEmpty) {
+      _storeName = currentOrder.storeName!;
+    }
+
+    final dLat = currentOrder.currentDeliveryLat;
+    final dLng = currentOrder.currentDeliveryLng;
+    final dHeading = currentOrder.currentDeliveryHeading;
+    final dUpdatedAt = currentOrder.currentDeliveryUpdatedAt;
+
+    if (dLat != null && dLng != null && (dLat != 0.0 || dLng != 0.0) && dLat >= -90.0 && dLat <= 90.0 && dLng >= -180.0 && dLng <= 180.0) {
+      final newLoc = LatLng(dLat, dLng);
+
+      bool stale = false;
+      if (dUpdatedAt != null && dUpdatedAt.isNotEmpty) {
+        try {
+          final dt = DateTime.parse(dUpdatedAt);
+          if (DateTime.now().toUtc().difference(dt.toUtc()).inSeconds.abs() > 120) {
+            stale = true;
+          }
+        } catch (_) {}
+      }
+      _isLocationStale = stale;
+
+      if (_driverLocation == null) {
+        _driverLocation = newLoc;
+        _previousDriverLocation = newLoc;
+        _targetDriverLocation = newLoc;
+        _hasRealDriverLocation = true;
+      } else if (_driverLocation != newLoc) {
+        _previousDriverLocation = _animatedDriverLocation;
+        _targetDriverLocation = newLoc;
+        _driverLocation = newLoc;
+        _hasRealDriverLocation = true;
+        _markerAnimationController?.forward(from: 0.0);
+      }
+      _driverHeading = dHeading;
+    } else {
+      _hasRealDriverLocation = false;
+    }
+
+    final status = currentOrder.status.toUpperCase();
+    final isDeliveryActive = _isOutForDelivery(status);
+
+    if (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null) {
+      _checkAndRefreshRoute(widget.order.id, _driverLocation!);
+    } else if (!isDeliveryActive && _routePolylinePoints.isEmpty) {
+      _checkAndRefreshRoute(widget.order.id, _storeLocation);
+    }
   }
 
   @override
@@ -299,62 +368,8 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
       orElse: () => widget.order,
     );
 
-    if (currentOrder.storeLat != null && currentOrder.storeLng != null) {
-      _storeLocation = LatLng(currentOrder.storeLat!, currentOrder.storeLng!);
-    }
-    if (currentOrder.storeName != null && currentOrder.storeName!.isNotEmpty) {
-      _storeName = currentOrder.storeName!;
-    }
-
-    // Process authoritative real backend driver coordinates
-    final dLat = currentOrder.currentDeliveryLat;
-    final dLng = currentOrder.currentDeliveryLng;
-    final dHeading = currentOrder.currentDeliveryHeading;
-    final dUpdatedAt = currentOrder.currentDeliveryUpdatedAt;
-
-    if (dLat != null && dLng != null && (dLat != 0.0 || dLng != 0.0) && dLat >= -90.0 && dLat <= 90.0 && dLng >= -180.0 && dLng <= 180.0) {
-      final newLoc = LatLng(dLat, dLng);
-
-      bool stale = false;
-      if (dUpdatedAt != null && dUpdatedAt.isNotEmpty) {
-        try {
-          final dt = DateTime.parse(dUpdatedAt);
-          if (DateTime.now().difference(dt).inSeconds > 120) {
-            stale = true;
-          }
-        } catch (_) {}
-      }
-      _isLocationStale = stale;
-
-      if (_driverLocation == null) {
-        _driverLocation = newLoc;
-        _previousDriverLocation = newLoc;
-        _targetDriverLocation = newLoc;
-        _hasRealDriverLocation = true;
-      } else if (_driverLocation != newLoc) {
-        _previousDriverLocation = _animatedDriverLocation;
-        _targetDriverLocation = newLoc;
-        _driverLocation = newLoc;
-        _hasRealDriverLocation = true;
-        _markerAnimationController?.forward(from: 0.0);
-      }
-      _driverHeading = dHeading;
-    } else {
-      _hasRealDriverLocation = false;
-    }
-
     final status = currentOrder.status.toUpperCase();
     final isDeliveryActive = _isOutForDelivery(status);
-
-    if (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null) {
-      _checkAndRefreshRoute(widget.order.id, _driverLocation!);
-    } else if (!isDeliveryActive && _routePolylinePoints.isEmpty) {
-      _checkAndRefreshRoute(widget.order.id, _storeLocation);
-    }
-
-    if (status == 'DELIVERED' || status == 'CANCELLED') {
-      _pollingTimer?.cancel();
-    }
 
     return Scaffold(
       backgroundColor: isDark ? AppColors.darkBackground : AppColors.background,
@@ -817,7 +832,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       itemCount: currentOrder.items.length,
-                      separatorBuilder: (_, __) => Divider(height: 1, color: isDark ? AppColors.darkCardBorder : AppColors.border),
+                      separatorBuilder: (context, index) => Divider(height: 1, color: isDark ? AppColors.darkCardBorder : AppColors.border),
                       itemBuilder: (context, index) {
                         final item = currentOrder.items[index];
                         return ListTile(
@@ -1374,8 +1389,10 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
               onPressed: _isSubmittingRating
                   ? null
                   : () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      final orderProvider = context.read<OrderProvider>();
                       setState(() => _isSubmittingRating = true);
-                      final success = await context.read<OrderProvider>().rateOrder(
+                      final success = await orderProvider.rateOrder(
                             order.id,
                             _selectedRating,
                             reviewComment: _ratingCommentController.text,
@@ -1383,7 +1400,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                       if (!mounted) return;
                       setState(() => _isSubmittingRating = false);
 
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      messenger.showSnackBar(
                         SnackBar(
                           content: Text(
                             success ? 'Thank you for your rating!' : 'Rating submitted!',
