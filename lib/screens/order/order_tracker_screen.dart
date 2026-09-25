@@ -34,6 +34,13 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   bool _isLocationStale = false;
   bool _hasRealDriverLocation = false;
 
+  // Real Road Route State
+  List<LatLng> _routePolylinePoints = [];
+  double? _routeDistanceKm;
+  double? _routeDurationMins;
+  DateTime? _lastRouteFetchTime;
+  bool _isFetchingRoute = false;
+
   AnimationController? _markerAnimationController;
   Animation<double>? _markerAnimation;
   Timer? _pollingTimer;
@@ -46,6 +53,74 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   int _selectedRating = 5;
   final TextEditingController _ratingCommentController = TextEditingController();
   bool _isSubmittingRating = false;
+
+  Future<void> _fetchRoadRoute(int orderId, LatLng origin) async {
+    if (_isFetchingRoute) return;
+    _isFetchingRoute = true;
+    try {
+      final response = await ApiService().client.get(
+        '${ApiConstants.orders}/$orderId/route',
+        queryParameters: {
+          'originLat': origin.latitude,
+          'originLng': origin.longitude,
+        },
+      );
+
+      if (response.statusCode == 200 && response.data != null && response.data['success'] == true) {
+        final data = response.data['data'];
+        if (data != null) {
+          final List rawPoints = data['points'] ?? [];
+          final List<LatLng> parsedPoints = [];
+          for (var p in rawPoints) {
+            if (p is List && p.length >= 2) {
+              final lat = (p[0] as num).toDouble();
+              final lng = (p[1] as num).toDouble();
+              parsedPoints.add(LatLng(lat, lng));
+            }
+          }
+
+          if (parsedPoints.isNotEmpty) {
+            _routePolylinePoints = parsedPoints;
+            _routeDistanceKm = (data['distanceKm'] as num?)?.toDouble();
+            _routeDurationMins = (data['durationMins'] as num?)?.toDouble();
+            _lastRouteFetchTime = DateTime.now();
+            if (mounted) setState(() {});
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[OrderTrackerScreen] Route fetch error: $e');
+    } finally {
+      _isFetchingRoute = false;
+    }
+  }
+
+  void _checkAndRefreshRoute(int orderId, LatLng origin) {
+    if (_routePolylinePoints.isEmpty || _lastRouteFetchTime == null) {
+      _fetchRoadRoute(orderId, origin);
+      return;
+    }
+
+    final secondsSinceLastFetch = DateTime.now().difference(_lastRouteFetchTime!).inSeconds;
+    if (secondsSinceLastFetch > 90) {
+      _fetchRoadRoute(orderId, origin);
+      return;
+    }
+
+    // Check off-route deviation (> 150m from nearest point on current road route)
+    double minDistanceMeters = double.infinity;
+    for (var pt in _routePolylinePoints) {
+      final dist = const Distance().as(LengthUnit.Meter, origin, pt);
+      if (dist < minDistanceMeters) {
+        minDistanceMeters = dist;
+      }
+    }
+
+    if (minDistanceMeters > 150.0) {
+      debugPrint('[OrderTrackerScreen] Off-route deviation detected (${minDistanceMeters.toStringAsFixed(0)}m). Recalculating route...');
+      _fetchRoadRoute(orderId, origin);
+    }
+  }
 
   @override
   void initState() {
@@ -271,6 +346,12 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     final status = currentOrder.status.toUpperCase();
     final isDeliveryActive = _isOutForDelivery(status);
 
+    if (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null) {
+      _checkAndRefreshRoute(widget.order.id, _driverLocation!);
+    } else if (!isDeliveryActive && _routePolylinePoints.isEmpty) {
+      _checkAndRefreshRoute(widget.order.id, _storeLocation);
+    }
+
     if (status == 'DELIVERED' || status == 'CANCELLED') {
       _pollingTimer?.cancel();
     }
@@ -351,13 +432,15 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                           maxZoom: 19,
                         ),
 
-                        // Polyline layer (Prepared for routing engine)
+                        // Real Road Route Polyline Layer
                         PolylineLayer(
                           polylines: [
                             Polyline(
-                              points: [_storeLocation, _deliveryLocation],
-                              strokeWidth: 4.5,
-                              color: AppColors.primary.withValues(alpha: 0.85),
+                              points: _routePolylinePoints.isNotEmpty
+                                  ? _routePolylinePoints
+                                  : [_storeLocation, _deliveryLocation],
+                              strokeWidth: 5.0,
+                              color: AppColors.primary.withValues(alpha: 0.90),
                             ),
                           ],
                         ),
@@ -492,14 +575,16 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
-                                (_hasRealDriverLocation && !_isLocationStale) ? Icons.my_location_rounded : Icons.gps_off_rounded,
+                                (_hasRealDriverLocation && !_isLocationStale) ? Icons.navigation_rounded : Icons.gps_off_rounded,
                                 color: (_hasRealDriverLocation && !_isLocationStale) ? AppColors.primary : Colors.white,
                                 size: 16,
                               ),
                               const SizedBox(width: 6),
                               Text(
                                 (_hasRealDriverLocation && !_isLocationStale)
-                                    ? 'Live Driver GPS Active'
+                                    ? (_routeDurationMins != null && _routeDistanceKm != null
+                                        ? 'Arriving in ${_routeDurationMins!.toStringAsFixed(0)} mins (${_routeDistanceKm!.toStringAsFixed(1)} km)'
+                                        : 'Live Driver GPS Active')
                                     : (_isLocationStale ? 'Driver GPS Signal Stale' : 'Awaiting Driver GPS Update...'),
                                 style: TextStyle(
                                   color: (_hasRealDriverLocation && !_isLocationStale) ? AppColors.title : Colors.white,
