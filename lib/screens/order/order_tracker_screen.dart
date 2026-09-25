@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -39,6 +40,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   double? _routeDistanceKm;
   double? _routeDurationMins;
   DateTime? _lastRouteFetchTime;
+  LatLng? _lastRouteFetchOrigin;
   bool _isFetchingRoute = false;
 
   AnimationController? _markerAnimationController;
@@ -54,6 +56,47 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   final TextEditingController _ratingCommentController = TextEditingController();
   bool _isSubmittingRating = false;
 
+  /// Calculate minimum geographic distance from point P to line segment AB in meters
+  double _distanceToSegmentMeters(LatLng p, LatLng a, LatLng b) {
+    final Distance distance = const Distance();
+    final double lengthAB = distance.as(LengthUnit.Meter, a, b);
+    if (lengthAB == 0) return distance.as(LengthUnit.Meter, p, a);
+
+    final double cosLat = math.cos((a.latitude * math.pi) / 180.0);
+    final double vx = (b.longitude - a.longitude) * cosLat;
+    final double vy = (b.latitude - a.latitude);
+    final double ux = (p.longitude - a.longitude) * cosLat;
+    final double uy = (p.latitude - a.latitude);
+
+    final double dot = ux * vx + uy * vy;
+    final double lenSq = vx * vx + vy * vy;
+    double t = lenSq == 0 ? 0 : dot / lenSq;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    final LatLng closestPoint = LatLng(
+      a.latitude + t * (b.latitude - a.latitude),
+      a.longitude + t * (b.longitude - a.longitude),
+    );
+
+    return distance.as(LengthUnit.Meter, p, closestPoint);
+  }
+
+  /// Calculate minimum geographic distance from point P to any segment of a polyline
+  double _minDistanceToPolylineMeters(LatLng p, List<LatLng> polyline) {
+    if (polyline.isEmpty) return double.infinity;
+    if (polyline.length == 1) return const Distance().as(LengthUnit.Meter, p, polyline.first);
+
+    double minDistance = double.infinity;
+    for (int i = 0; i < polyline.length - 1; i++) {
+      final dist = _distanceToSegmentMeters(p, polyline[i], polyline[i + 1]);
+      if (dist < minDistance) {
+        minDistance = dist;
+      }
+    }
+    return minDistance;
+  }
+
   Future<void> _fetchRoadRoute(int orderId, LatLng origin) async {
     if (_isFetchingRoute) return;
     _isFetchingRoute = true;
@@ -68,7 +111,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
 
       if (response.statusCode == 200 && response.data != null && response.data['success'] == true) {
         final data = response.data['data'];
-        if (data != null) {
+        if (data != null && data['status'] == 'SUCCESS') {
           final List rawPoints = data['points'] ?? [];
           final List<LatLng> parsedPoints = [];
           for (var p in rawPoints) {
@@ -84,8 +127,15 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
             _routeDistanceKm = (data['distanceKm'] as num?)?.toDouble();
             _routeDurationMins = (data['durationMins'] as num?)?.toDouble();
             _lastRouteFetchTime = DateTime.now();
+            _lastRouteFetchOrigin = origin;
             if (mounted) setState(() {});
           }
+        } else {
+          // Route engine failed or unavailable - NEVER render straight line
+          _routePolylinePoints = [];
+          _routeDistanceKm = null;
+          _routeDurationMins = null;
+          if (mounted) setState(() {});
         }
       }
     } catch (e) {
@@ -95,29 +145,30 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     }
   }
 
-  void _checkAndRefreshRoute(int orderId, LatLng origin) {
-    if (_routePolylinePoints.isEmpty || _lastRouteFetchTime == null) {
+  void _checkAndRefreshRoute(int orderId, LatLng origin, bool isDeliveryActive) {
+    // Item 9: For active delivery, route MUST originate from driver GPS
+    if (isDeliveryActive && !_hasRealDriverLocation) {
+      return; // Await driver location fix
+    }
+
+    if (_routePolylinePoints.isEmpty || _lastRouteFetchTime == null || _lastRouteFetchOrigin == null) {
       _fetchRoadRoute(orderId, origin);
       return;
     }
 
     final secondsSinceLastFetch = DateTime.now().difference(_lastRouteFetchTime!).inSeconds;
-    if (secondsSinceLastFetch > 90) {
+    final originMovementMeters = const Distance().as(LengthUnit.Meter, origin, _lastRouteFetchOrigin!);
+
+    // Item 8: Refresh if >90s AND driver moved > 20 meters
+    if (secondsSinceLastFetch > 90 && originMovementMeters > 20.0) {
       _fetchRoadRoute(orderId, origin);
       return;
     }
 
-    // Check off-route deviation (> 150m from nearest point on current road route)
-    double minDistanceMeters = double.infinity;
-    for (var pt in _routePolylinePoints) {
-      final dist = const Distance().as(LengthUnit.Meter, origin, pt);
-      if (dist < minDistanceMeters) {
-        minDistanceMeters = dist;
-      }
-    }
-
-    if (minDistanceMeters > 150.0) {
-      debugPrint('[OrderTrackerScreen] Off-route deviation detected (${minDistanceMeters.toStringAsFixed(0)}m). Recalculating route...');
+    // Item 7: Point-to-segment deviation threshold (> 150m from line segments)
+    final minSegDistanceMeters = _minDistanceToPolylineMeters(origin, _routePolylinePoints);
+    if (minSegDistanceMeters > 150.0) {
+      debugPrint('[OrderTrackerScreen] Point-to-segment off-route deviation detected (${minSegDistanceMeters.toStringAsFixed(0)}m > 150m). Recalculating route...');
       _fetchRoadRoute(orderId, origin);
     }
   }
@@ -246,9 +297,9 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     final isDeliveryActive = _isOutForDelivery(status);
 
     if (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null) {
-      _checkAndRefreshRoute(widget.order.id, _driverLocation!);
+      _checkAndRefreshRoute(widget.order.id, _driverLocation!, true);
     } else if (!isDeliveryActive && _routePolylinePoints.isEmpty) {
-      _checkAndRefreshRoute(widget.order.id, _storeLocation);
+      _checkAndRefreshRoute(widget.order.id, _storeLocation, false);
     }
   }
 
@@ -447,16 +498,15 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                           maxZoom: 19,
                         ),
 
-                        // Real Road Route Polyline Layer
+                        // Real Road Route Polyline Layer (NO FAKE STRAIGHT LINE FALLBACK)
                         PolylineLayer(
                           polylines: [
-                            Polyline(
-                              points: _routePolylinePoints.isNotEmpty
-                                  ? _routePolylinePoints
-                                  : [_storeLocation, _deliveryLocation],
-                              strokeWidth: 5.0,
-                              color: AppColors.primary.withValues(alpha: 0.90),
-                            ),
+                            if (_routePolylinePoints.isNotEmpty)
+                              Polyline(
+                                points: _routePolylinePoints,
+                                strokeWidth: 5.0,
+                                color: AppColors.primary.withValues(alpha: 0.90),
+                              ),
                           ],
                         ),
 
@@ -597,9 +647,9 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                               const SizedBox(width: 6),
                               Text(
                                 (_hasRealDriverLocation && !_isLocationStale)
-                                    ? (_routeDurationMins != null && _routeDistanceKm != null
+                                    ? (_routePolylinePoints.isNotEmpty && _routeDurationMins != null && _routeDistanceKm != null
                                         ? 'Arriving in ${_routeDurationMins!.toStringAsFixed(0)} mins (${_routeDistanceKm!.toStringAsFixed(1)} km)'
-                                        : 'Live Driver GPS Active')
+                                        : (_routePolylinePoints.isEmpty ? 'Road Route Unavailable' : 'Live Driver GPS Active'))
                                     : (_isLocationStale ? 'Driver GPS Signal Stale' : 'Awaiting Driver GPS Update...'),
                                 style: TextStyle(
                                   color: (_hasRealDriverLocation && !_isLocationStale) ? AppColors.title : Colors.white,
