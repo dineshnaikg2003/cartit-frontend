@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/app_colors.dart';
@@ -23,7 +23,7 @@ class OrderTrackerScreen extends StatefulWidget {
 }
 
 class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTickerProviderStateMixin {
-  final MapController _mapController = MapController();
+  GoogleMapController? _mapController;
 
   // Map Coordinates
   late LatLng _storeLocation;
@@ -34,6 +34,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   double? _driverHeading;
   bool _isLocationStale = false;
   bool _hasRealDriverLocation = false;
+  bool _hasAddressCoordinatesError = false;
 
   // Real Road Route State
   List<LatLng> _routePolylinePoints = [];
@@ -58,9 +59,8 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
 
   /// Calculate minimum geographic distance from point P to line segment AB in meters
   double _distanceToSegmentMeters(LatLng p, LatLng a, LatLng b) {
-    final Distance distance = const Distance();
-    final double lengthAB = distance.as(LengthUnit.Meter, a, b);
-    if (lengthAB == 0) return distance.as(LengthUnit.Meter, p, a);
+    final double lengthAB = Geolocator.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude);
+    if (lengthAB == 0) return Geolocator.distanceBetween(p.latitude, p.longitude, a.latitude, a.longitude);
 
     final double cosLat = math.cos((a.latitude * math.pi) / 180.0);
     final double vx = (b.longitude - a.longitude) * cosLat;
@@ -79,13 +79,15 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
       a.longitude + t * (b.longitude - a.longitude),
     );
 
-    return distance.as(LengthUnit.Meter, p, closestPoint);
+    return Geolocator.distanceBetween(p.latitude, p.longitude, closestPoint.latitude, closestPoint.longitude);
   }
 
   /// Calculate minimum geographic distance from point P to any segment of a polyline
   double _minDistanceToPolylineMeters(LatLng p, List<LatLng> polyline) {
     if (polyline.isEmpty) return double.infinity;
-    if (polyline.length == 1) return const Distance().as(LengthUnit.Meter, p, polyline.first);
+    if (polyline.length == 1) {
+      return Geolocator.distanceBetween(p.latitude, p.longitude, polyline.first.latitude, polyline.first.longitude);
+    }
 
     double minDistance = double.infinity;
     for (int i = 0; i < polyline.length - 1; i++) {
@@ -146,7 +148,6 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   }
 
   void _checkAndRefreshRoute(int orderId, LatLng origin, bool isDeliveryActive) {
-    // Item 9: For active delivery, route MUST originate from driver GPS
     if (isDeliveryActive && !_hasRealDriverLocation) {
       return; // Await driver location fix
     }
@@ -157,15 +158,18 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     }
 
     final secondsSinceLastFetch = DateTime.now().difference(_lastRouteFetchTime!).inSeconds;
-    final originMovementMeters = const Distance().as(LengthUnit.Meter, origin, _lastRouteFetchOrigin!);
+    final originMovementMeters = Geolocator.distanceBetween(
+      origin.latitude, origin.longitude,
+      _lastRouteFetchOrigin!.latitude, _lastRouteFetchOrigin!.longitude
+    );
 
-    // Item 8: Refresh if >90s AND driver moved > 20 meters
+    // Refresh if >90s AND driver moved > 20 meters
     if (secondsSinceLastFetch > 90 && originMovementMeters > 20.0) {
       _fetchRoadRoute(orderId, origin);
       return;
     }
 
-    // Item 7: Point-to-segment deviation threshold (> 150m from line segments)
+    // Point-to-segment deviation threshold (> 150m from line segments)
     final minSegDistanceMeters = _minDistanceToPolylineMeters(origin, _routePolylinePoints);
     if (minSegDistanceMeters > 150.0) {
       debugPrint('[OrderTrackerScreen] Point-to-segment off-route deviation detected (${minSegDistanceMeters.toStringAsFixed(0)}m > 150m). Recalculating route...');
@@ -189,37 +193,15 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     );
 
     final addr = widget.order.shippingAddress;
-    double lat = 12.9716;
-    double lng = 77.5946;
-
-    if (addr?.latitude != null && addr!.latitude! != 0.0) {
-      lat = addr.latitude!;
-      lng = addr.longitude!;
-    } else if (addr?.city != null) {
-      final cityLower = addr!.city.toLowerCase();
-      if (cityLower.contains('mumbai')) {
-        lat = 19.0760; lng = 72.8777;
-      } else if (cityLower.contains('delhi') || cityLower.contains('noida') || cityLower.contains('gurgaon')) {
-        lat = 28.6139; lng = 77.2090;
-      } else if (cityLower.contains('hyderabad')) {
-        lat = 17.3850; lng = 78.4867;
-      } else if (cityLower.contains('chennai')) {
-        lat = 13.0827; lng = 80.2707;
-      } else if (cityLower.contains('kolkata')) {
-        lat = 22.5726; lng = 88.3639;
-      } else if (cityLower.contains('kochi') || cityLower.contains('ernakulam')) {
-        lat = 9.9312; lng = 76.2673;
-      } else if (cityLower.contains('trivandrum') || cityLower.contains('thiruvananthapuram')) {
-        lat = 8.5241; lng = 76.9366;
-      } else if (cityLower.contains('pune')) {
-        lat = 18.5204; lng = 73.8567;
-      } else if (cityLower.contains('ahmedabad')) {
-        lat = 23.0225; lng = 72.5714;
-      }
+    if (addr?.latitude != null && addr!.latitude! != 0.0 && addr.longitude != null && addr.longitude! != 0.0) {
+      _deliveryLocation = LatLng(addr.latitude!, addr.longitude!);
+      _hasAddressCoordinatesError = false;
+    } else {
+      // Default placeholder when coordinates missing - flag address-location error
+      _deliveryLocation = const LatLng(12.9716, 77.5946);
+      _hasAddressCoordinatesError = true;
     }
-
-    _deliveryLocation = LatLng(lat, lng);
-    _storeLocation = LatLng(lat - 0.012, lng - 0.010);
+    _storeLocation = LatLng(_deliveryLocation.latitude - 0.012, _deliveryLocation.longitude - 0.010);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fitMapBounds();
@@ -307,7 +289,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   void dispose() {
     _pollingTimer?.cancel();
     _markerAnimationController?.dispose();
-    _mapController.dispose();
+    _mapController?.dispose();
     _ratingCommentController.dispose();
     super.dispose();
   }
@@ -325,12 +307,89 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   }
 
   void _fitMapBounds() {
+    if (_mapController == null) return;
     final points = <LatLng>[_storeLocation, _deliveryLocation];
     if (_hasRealDriverLocation && _driverLocation != null && !_isLocationStale) {
       points.add(_driverLocation!);
     }
-    final bounds = LatLngBounds.fromPoints(points);
-    _mapController.fitCamera(CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(45)));
+
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (final p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngBounds(bounds, 50),
+    );
+  }
+
+  Set<Marker> _buildGoogleMapMarkers(bool isDeliveryActive, OrderModel currentOrder) {
+    final markers = <Marker>{
+      // Store Hub Marker
+      Marker(
+        markerId: const MarkerId('store'),
+        position: _storeLocation,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+        infoWindow: InfoWindow(
+          title: _storeName,
+          snippet: 'Store Hub',
+        ),
+      ),
+      // Customer Destination Marker
+      Marker(
+        markerId: const MarkerId('delivery'),
+        position: _deliveryLocation,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        infoWindow: InfoWindow(
+          title: 'Deliver to ${currentOrder.shippingAddress?.fullName.split(' ').first ?? 'Customer'}',
+          snippet: currentOrder.shippingAddress?.street ?? 'Delivery Location',
+        ),
+      ),
+    };
+
+    if (isDeliveryActive && _hasRealDriverLocation && !_isLocationStale && _driverLocation != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: _animatedDriverLocation,
+          rotation: _driverHeading ?? 0.0,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          infoWindow: InfoWindow(
+            title: 'Delivery Partner ($_driverName)',
+            snippet: 'Real-time GPS Location',
+          ),
+        ),
+      );
+    }
+
+    return markers;
+  }
+
+  Set<Polyline> _buildGoogleMapPolylines() {
+    final polylines = <Polyline>{};
+    if (_routePolylinePoints.isNotEmpty) {
+      polylines.add(
+        Polyline(
+          polylineId: const PolylineId('road_route'),
+          points: _routePolylinePoints,
+          color: AppColors.primary,
+          width: 5,
+        ),
+      );
+    }
+    return polylines;
   }
 
   Future<void> _resolveActualLocations() async {
@@ -466,6 +525,25 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
       body: SingleChildScrollView(
         child: Column(
           children: [
+            if (_hasAddressCoordinatesError)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                color: Colors.red.shade700,
+                child: const Row(
+                  children: [
+                    Icon(Icons.location_off_rounded, color: Colors.white, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Address location coordinates missing. Please update delivery address location.',
+                        style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             // -----------------------------------------------------------------
             // 1. EMBEDDED MAP VIEW AT THE TOP OF THE TRACKER SCREEN
             // -----------------------------------------------------------------
@@ -481,147 +559,23 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                 borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
                 child: Stack(
                   children: [
-                    FlutterMap(
-                      mapController: _mapController,
-                      options: MapOptions(
-                        initialCenter: (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null)
+                    GoogleMap(
+                      initialCameraPosition: CameraPosition(
+                        target: (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null)
                             ? _driverLocation!
                             : _deliveryLocation,
-                        initialZoom: 14.2,
-                        minZoom: 10.0,
-                        maxZoom: 19.0,
+                        zoom: 14.2,
                       ),
-                      children: [
-                        TileLayer(
-                          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'com.example.cartit',
-                          maxZoom: 19,
-                        ),
-
-                        // Real Road Route Polyline Layer (NO FAKE STRAIGHT LINE FALLBACK)
-                        PolylineLayer(
-                          polylines: [
-                            if (_routePolylinePoints.isNotEmpty)
-                              Polyline(
-                                points: _routePolylinePoints,
-                                strokeWidth: 5.0,
-                                color: AppColors.primary.withValues(alpha: 0.90),
-                              ),
-                          ],
-                        ),
-
-                        // Markers
-                        MarkerLayer(
-                          markers: [
-                            // Store Hub Pin
-                            Marker(
-                              point: _storeLocation,
-                              width: 120,
-                              height: 60,
-                              alignment: Alignment.topCenter,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(6),
-                                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-                                    ),
-                                    child: Text(
-                                      _storeName,
-                                      style: const TextStyle(
-                                        fontSize: 9.5,
-                                        fontWeight: FontWeight.w900,
-                                        color: AppColors.title,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Container(
-                                    width: 32,
-                                    height: 32,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
-                                      boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 6)],
-                                    ),
-                                    child: const Icon(Icons.storefront_rounded, color: AppColors.primary, size: 18),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            // Home Delivery Destination Pin
-                            Marker(
-                              point: _deliveryLocation,
-                              width: 130,
-                              height: 60,
-                              alignment: Alignment.topCenter,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary,
-                                      borderRadius: BorderRadius.circular(6),
-                                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-                                    ),
-                                    child: Text(
-                                      'Deliver: ${currentOrder.shippingAddress?.fullName.split(' ').first ?? 'Home'}',
-                                      style: const TextStyle(
-                                        fontSize: 9.5,
-                                        fontWeight: FontWeight.w900,
-                                        color: Colors.white,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Container(
-                                    padding: const EdgeInsets.all(5),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary,
-                                      shape: BoxShape.circle,
-                                      border: Border.all(color: Colors.white, width: 2),
-                                      boxShadow: const [
-                                        BoxShadow(color: Colors.black26, blurRadius: 6),
-                                      ],
-                                    ),
-                                    child: const Icon(Icons.home_rounded, color: Colors.white, size: 18),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            // Real Driver Marker with Smooth Interpolation & Heading Rotation
-                            if (isDeliveryActive && _hasRealDriverLocation && !_isLocationStale)
-                              Marker(
-                                point: _animatedDriverLocation,
-                                width: 48,
-                                height: 48,
-                                alignment: Alignment.center,
-                                child: Transform.rotate(
-                                  angle: (_driverHeading ?? 0.0) * (3.141592653589793 / 180.0),
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF00B259),
-                                      shape: BoxShape.circle,
-                                      border: Border.all(color: Colors.white, width: 2.5),
-                                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8)],
-                                    ),
-                                    child: const Icon(Icons.two_wheeler_rounded, color: Colors.white, size: 24),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
+                      markers: _buildGoogleMapMarkers(isDeliveryActive, currentOrder),
+                      polylines: _buildGoogleMapPolylines(),
+                      myLocationEnabled: false,
+                      zoomControlsEnabled: false,
+                      compassEnabled: true,
+                      mapToolbarEnabled: false,
+                      onMapCreated: (controller) {
+                        _mapController = controller;
+                        _fitMapBounds();
+                      },
                     ),
 
                     // Top ETA / GPS Status Badge overlay on map when delivery active

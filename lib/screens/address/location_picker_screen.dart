@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:dio/dio.dart';
 import '../../app/app_colors.dart';
@@ -16,7 +15,7 @@ class LocationPickerScreen extends StatefulWidget {
 }
 
 class _LocationPickerScreenState extends State<LocationPickerScreen> {
-  final MapController _mapController = MapController();
+  GoogleMapController? _mapController;
   final TextEditingController _searchController = TextEditingController();
 
   late LatLng _currentCenter;
@@ -47,7 +46,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   void dispose() {
     _debounceTimer?.cancel();
     _searchController.dispose();
-    _mapController.dispose();
+    _mapController?.dispose();
     super.dispose();
   }
 
@@ -111,7 +110,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         setState(() {
           _currentCenter = newCenter;
         });
-        _mapController.move(newCenter, 16.5);
+        _mapController?.animateCamera(CameraUpdate.newLatLngZoom(newCenter, 16.5));
         _reverseGeocode(newCenter);
       } else {
         _reverseGeocode(_currentCenter);
@@ -119,20 +118,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     } catch (_) {
       _reverseGeocode(_currentCenter);
     }
-  }
-
-  void _onMapPositionChanged(MapCamera camera, bool hasGesture) {
-    if (hasGesture && !_isDragging) {
-      setState(() => _isDragging = true);
-    }
-    _currentCenter = camera.center;
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) {
-        setState(() => _isDragging = false);
-      }
-      _reverseGeocode(_currentCenter);
-    });
   }
 
   String _extractPincode(String pc, String fullText) {
@@ -411,7 +396,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
     if (lat != 0.0 && lon != 0.0) {
       final target = LatLng(lat, lon);
-      _mapController.move(target, 16.5);
+      _mapController?.animateCamera(CameraUpdate.newLatLngZoom(target, 16.5));
       setState(() {
         _currentCenter = target;
         _searchResults = [];
@@ -423,13 +408,11 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   }
 
   void _zoomIn() {
-    final currentZoom = _mapController.camera.zoom;
-    _mapController.move(_mapController.camera.center, (currentZoom + 1).clamp(3.0, 20.0));
+    _mapController?.animateCamera(CameraUpdate.zoomIn());
   }
 
   void _zoomOut() {
-    final currentZoom = _mapController.camera.zoom;
-    _mapController.move(_mapController.camera.center, (currentZoom - 1).clamp(3.0, 20.0));
+    _mapController?.animateCamera(CameraUpdate.zoomOut());
   }
 
   void _confirmLocation() {
@@ -459,43 +442,35 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         top: false,
         child: Stack(
           children: [
-            // Official Real-Time Google Maps Tile Engine
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _currentCenter,
-                initialZoom: 16.5,
-                minZoom: 3.0,
-                maxZoom: 20.0,
-                interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.all,
-                ),
-                onPositionChanged: _onMapPositionChanged,
+            GoogleMap(
+              initialCameraPosition: CameraPosition(
+                target: _currentCenter,
+                zoom: 16.5,
               ),
-              children: [
-                TileLayer(
-                  urlTemplate: _isSatellite
-                      ? 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
-                      : 'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
-                  subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
-                  tileBuilder: mapIsDark && !_isSatellite
-                      ? (context, tileWidget, tile) {
-                          return ColorFiltered(
-                            colorFilter: const ColorFilter.matrix([
-                              -0.9, 0.0, 0.0, 0.0, 255,
-                              0.0, -0.9, 0.0, 0.0, 255,
-                              0.0, 0.0, -0.9, 0.0, 255,
-                              0.0, 0.0, 0.0, 1.0, 0,
-                            ]),
-                            child: tileWidget,
-                          );
-                        }
-                      : null,
-                  userAgentPackageName: 'com.example.cartit',
-                  maxZoom: 20,
-                  tileProvider: NetworkTileProvider(),
-                ),
-              ],
+              mapType: _isSatellite ? MapType.hybrid : MapType.normal,
+              myLocationEnabled: true,
+              myLocationButtonEnabled: false,
+              zoomControlsEnabled: false,
+              compassEnabled: true,
+              mapToolbarEnabled: false,
+              onCameraMove: (position) {
+                if (!_isDragging) {
+                  setState(() => _isDragging = true);
+                }
+                _currentCenter = position.target;
+              },
+              onCameraIdle: () {
+                if (mounted) {
+                  setState(() => _isDragging = false);
+                }
+                _debounceTimer?.cancel();
+                _debounceTimer = Timer(const Duration(milliseconds: 250), () {
+                  _reverseGeocode(_currentCenter);
+                });
+              },
+              onMapCreated: (controller) {
+                _mapController = controller;
+              },
             ),
 
             // Center Pin Marker with Exact Google Maps Needle Alignment
