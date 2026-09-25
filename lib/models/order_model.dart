@@ -54,6 +54,10 @@ class OrderModel {
   final String? deliveryBoyPhone;
   final double? currentDeliveryLat;
   final double? currentDeliveryLng;
+  final double? currentDeliveryHeading;
+  final double? currentDeliverySpeed;
+  final double? currentDeliveryAccuracy;
+  final String? currentDeliveryUpdatedAt;
   final String? storeName;
   final String? storeAddress;
   final double? storeLat;
@@ -79,6 +83,10 @@ class OrderModel {
     this.deliveryBoyPhone,
     this.currentDeliveryLat,
     this.currentDeliveryLng,
+    this.currentDeliveryHeading,
+    this.currentDeliverySpeed,
+    this.currentDeliveryAccuracy,
+    this.currentDeliveryUpdatedAt,
     this.storeName,
     this.storeAddress,
     this.storeLat,
@@ -142,6 +150,10 @@ class OrderModel {
       deliveryBoyPhone: json['deliveryBoyPhone']?.toString(),
       currentDeliveryLat: (json['currentDeliveryLatitude'] as num?)?.toDouble(),
       currentDeliveryLng: (json['currentDeliveryLongitude'] as num?)?.toDouble(),
+      currentDeliveryHeading: (json['currentDeliveryHeading'] as num?)?.toDouble(),
+      currentDeliverySpeed: (json['currentDeliverySpeed'] as num?)?.toDouble(),
+      currentDeliveryAccuracy: (json['currentDeliveryAccuracy'] as num?)?.toDouble(),
+      currentDeliveryUpdatedAt: json['currentDeliveryUpdatedAt']?.toString(),
       storeName: json['storeName']?.toString(),
       storeAddress: json['storeAddress']?.toString(),
       storeLat: (json['storeLatitude'] as num?)?.toDouble(),

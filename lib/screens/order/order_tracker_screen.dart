@@ -27,18 +27,20 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   // Map Coordinates
   late LatLng _storeLocation;
   late LatLng _deliveryLocation;
-  late LatLng _driverLocation;
+  LatLng? _driverLocation;
+  LatLng? _previousDriverLocation;
+  LatLng? _targetDriverLocation;
+  double? _driverHeading;
+  bool _isLocationStale = false;
+  bool _hasRealDriverLocation = false;
 
-  double _driverProgress = 0.35;
-  Timer? _movementTimer;
+  AnimationController? _markerAnimationController;
+  Animation<double>? _markerAnimation;
   Timer? _pollingTimer;
 
-  String _estimatedTime = '8-10 mins';
-  String _currentDeliveryStatus = 'Delivery Partner on the way to your location';
   String _storeName = 'CartIT Central Hub';
   final String _driverName = 'Rajesh Kumar';
   final String _driverPhone = '+91 9876543210';
-  final String _vehicleNumber = 'KA 05 ET 4321';
 
   // Rating State
   int _selectedRating = 5;
@@ -48,6 +50,17 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   @override
   void initState() {
     super.initState();
+
+    _markerAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..addListener(() {
+        if (mounted) setState(() {});
+      });
+    _markerAnimation = CurvedAnimation(
+      parent: _markerAnimationController!,
+      curve: Curves.easeInOut,
+    );
 
     final addr = widget.order.shippingAddress;
     double lat = 12.9716;
@@ -81,65 +94,52 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
 
     _deliveryLocation = LatLng(lat, lng);
     _storeLocation = LatLng(lat - 0.012, lng - 0.010);
-    _driverLocation = _calculateInterpolatedPosition(_driverProgress);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fitMapBounds();
       _resolveActualLocations();
     });
 
-    // 1. Periodic backend order status polling (every 3s)
+    // Authoritative periodic backend order polling (every 3s)
     _pollingTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       if (mounted) {
         context.read<OrderProvider>().fetchMyOrders();
       }
     });
-
-    // 2. Driver position animation timer on map
-    _movementTimer = Timer.periodic(const Duration(milliseconds: 2500), (timer) {
-      if (!mounted) return;
-      setState(() {
-        if (_driverProgress < 0.95) {
-          _driverProgress += 0.04;
-          _driverLocation = _calculateInterpolatedPosition(_driverProgress);
-
-          if (_driverProgress < 0.40) {
-            _estimatedTime = '8-10 mins';
-            _currentDeliveryStatus = 'Delivery Partner assigned & moving';
-          } else if (_driverProgress < 0.80) {
-            _estimatedTime = '4-6 mins';
-            _currentDeliveryStatus = 'Out for Delivery (Near your location)';
-          } else {
-            _estimatedTime = '1-2 mins';
-            _currentDeliveryStatus = 'Partner Arrived at Your Doorstep!';
-          }
-        }
-      });
-    });
   }
 
   @override
   void dispose() {
-    _movementTimer?.cancel();
     _pollingTimer?.cancel();
+    _markerAnimationController?.dispose();
     _mapController.dispose();
     _ratingCommentController.dispose();
     super.dispose();
   }
 
-  LatLng _calculateInterpolatedPosition(double progress) {
-    final lat = _storeLocation.latitude + (_deliveryLocation.latitude - _storeLocation.latitude) * progress;
-    final lng = _storeLocation.longitude + (_deliveryLocation.longitude - _storeLocation.longitude) * progress;
+  LatLng get _animatedDriverLocation {
+    if (_previousDriverLocation == null || _targetDriverLocation == null || _markerAnimation == null) {
+      return _driverLocation ?? _storeLocation;
+    }
+    final t = _markerAnimation!.value;
+    final lat = _previousDriverLocation!.latitude +
+        (_targetDriverLocation!.latitude - _previousDriverLocation!.latitude) * t;
+    final lng = _previousDriverLocation!.longitude +
+        (_targetDriverLocation!.longitude - _previousDriverLocation!.longitude) * t;
     return LatLng(lat, lng);
   }
 
   void _fitMapBounds() {
-    final bounds = LatLngBounds.fromPoints([_storeLocation, _deliveryLocation, _driverLocation]);
-    _mapController.fitCamera(CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(40)));
+    final points = <LatLng>[_storeLocation, _deliveryLocation];
+    if (_hasRealDriverLocation && _driverLocation != null && !_isLocationStale) {
+      points.add(_driverLocation!);
+    }
+    final bounds = LatLngBounds.fromPoints(points);
+    _mapController.fitCamera(CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(45)));
   }
 
   Future<void> _resolveActualLocations() async {
-    // A. FETCH REAL STORE LOCATION DETAILS FROM BACKEND (GET /api/store)
+    // FETCH REAL STORE LOCATION DETAILS FROM BACKEND (GET /api/store)
     try {
       final response = await ApiService().client.get(ApiConstants.store);
       if (response.statusCode == 200 && response.data['success'] == true) {
@@ -158,7 +158,9 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
       }
     } catch (_) {}
 
-    // B. FETCH REAL CUSTOMER DELIVERY ADDRESS LOCATION
+    if (!mounted) return;
+
+    // FETCH REAL CUSTOMER DELIVERY ADDRESS LOCATION
     final orderProvider = context.read<OrderProvider>();
     final currentOrder = orderProvider.orders.firstWhere(
       (o) => o.id == widget.order.id,
@@ -202,9 +204,6 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     }
 
     if (mounted) {
-      setState(() {
-        _driverLocation = _calculateInterpolatedPosition(_driverProgress);
-      });
       _fitMapBounds();
     }
   }
@@ -228,15 +227,53 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     if (currentOrder.storeLat != null && currentOrder.storeLng != null) {
       _storeLocation = LatLng(currentOrder.storeLat!, currentOrder.storeLng!);
     }
-    if (currentOrder.currentDeliveryLat != null && currentOrder.currentDeliveryLng != null) {
-      _driverLocation = LatLng(currentOrder.currentDeliveryLat!, currentOrder.currentDeliveryLng!);
-    }
     if (currentOrder.storeName != null && currentOrder.storeName!.isNotEmpty) {
       _storeName = currentOrder.storeName!;
     }
 
+    // Process authoritative real backend driver coordinates
+    final dLat = currentOrder.currentDeliveryLat;
+    final dLng = currentOrder.currentDeliveryLng;
+    final dHeading = currentOrder.currentDeliveryHeading;
+    final dUpdatedAt = currentOrder.currentDeliveryUpdatedAt;
+
+    if (dLat != null && dLng != null && (dLat != 0.0 || dLng != 0.0) && dLat >= -90.0 && dLat <= 90.0 && dLng >= -180.0 && dLng <= 180.0) {
+      final newLoc = LatLng(dLat, dLng);
+
+      bool stale = false;
+      if (dUpdatedAt != null && dUpdatedAt.isNotEmpty) {
+        try {
+          final dt = DateTime.parse(dUpdatedAt);
+          if (DateTime.now().difference(dt).inSeconds > 120) {
+            stale = true;
+          }
+        } catch (_) {}
+      }
+      _isLocationStale = stale;
+
+      if (_driverLocation == null) {
+        _driverLocation = newLoc;
+        _previousDriverLocation = newLoc;
+        _targetDriverLocation = newLoc;
+        _hasRealDriverLocation = true;
+      } else if (_driverLocation != newLoc) {
+        _previousDriverLocation = _animatedDriverLocation;
+        _targetDriverLocation = newLoc;
+        _driverLocation = newLoc;
+        _hasRealDriverLocation = true;
+        _markerAnimationController?.forward(from: 0.0);
+      }
+      _driverHeading = dHeading;
+    } else {
+      _hasRealDriverLocation = false;
+    }
+
     final status = currentOrder.status.toUpperCase();
     final isDeliveryActive = _isOutForDelivery(status);
+
+    if (status == 'DELIVERED' || status == 'CANCELLED') {
+      _pollingTimer?.cancel();
+    }
 
     return Scaffold(
       backgroundColor: isDark ? AppColors.darkBackground : AppColors.background,
@@ -300,7 +337,9 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                     FlutterMap(
                       mapController: _mapController,
                       options: MapOptions(
-                        initialCenter: isDeliveryActive ? _driverLocation : _deliveryLocation,
+                        initialCenter: (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null)
+                            ? _driverLocation!
+                            : _deliveryLocation,
                         initialZoom: 14.2,
                         minZoom: 10.0,
                         maxZoom: 19.0,
@@ -312,7 +351,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                           maxZoom: 19,
                         ),
 
-                        // Route Polyline
+                        // Polyline layer (Prepared for routing engine)
                         PolylineLayer(
                           polylines: [
                             Polyline(
@@ -326,7 +365,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                         // Markers
                         MarkerLayer(
                           markers: [
-                            // Store Hub Pin with Label Badge
+                            // Store Hub Pin
                             Marker(
                               point: _storeLocation,
                               width: 120,
@@ -368,7 +407,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                               ),
                             ),
 
-                            // Home Delivery Destination Pin with Customer Address Label Badge
+                            // Home Delivery Destination Pin
                             Marker(
                               point: _deliveryLocation,
                               width: 130,
@@ -412,21 +451,24 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                               ),
                             ),
 
-                            // Moving Driver Scooter Marker (Only when delivery is active)
-                            if (isDeliveryActive)
+                            // Real Driver Marker with Smooth Interpolation & Heading Rotation
+                            if (isDeliveryActive && _hasRealDriverLocation && !_isLocationStale)
                               Marker(
-                                point: _driverLocation,
+                                point: _animatedDriverLocation,
                                 width: 48,
                                 height: 48,
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 500),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF00B259),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: Colors.white, width: 2.5),
-                                    boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8)],
+                                alignment: Alignment.center,
+                                child: Transform.rotate(
+                                  angle: (_driverHeading ?? 0.0) * (3.141592653589793 / 180.0),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF00B259),
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: Colors.white, width: 2.5),
+                                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8)],
+                                    ),
+                                    child: const Icon(Icons.two_wheeler_rounded, color: Colors.white, size: 24),
                                   ),
-                                  child: const Icon(Icons.two_wheeler_rounded, color: Colors.white, size: 24),
                                 ),
                               ),
                           ],
@@ -434,7 +476,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                       ],
                     ),
 
-                    // Top ETA Badge overlay on map when delivery active
+                    // Top ETA / GPS Status Badge overlay on map when delivery active
                     if (isDeliveryActive)
                       Positioned(
                         top: 12,
@@ -442,21 +484,27 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: (_hasRealDriverLocation && !_isLocationStale) ? Colors.white : Colors.amber.shade900,
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.timer_outlined, color: AppColors.primary, size: 16),
+                              Icon(
+                                (_hasRealDriverLocation && !_isLocationStale) ? Icons.my_location_rounded : Icons.gps_off_rounded,
+                                color: (_hasRealDriverLocation && !_isLocationStale) ? AppColors.primary : Colors.white,
+                                size: 16,
+                              ),
                               const SizedBox(width: 6),
                               Text(
-                                'Arriving in $_estimatedTime',
-                                style: const TextStyle(
-                                  color: AppColors.title,
+                                (_hasRealDriverLocation && !_isLocationStale)
+                                    ? 'Live Driver GPS Active'
+                                    : (_isLocationStale ? 'Driver GPS Signal Stale' : 'Awaiting Driver GPS Update...'),
+                                style: TextStyle(
+                                  color: (_hasRealDriverLocation && !_isLocationStale) ? AppColors.title : Colors.white,
                                   fontWeight: FontWeight.w900,
-                                  fontSize: 12,
+                                  fontSize: 11.5,
                                 ),
                               ),
                             ],

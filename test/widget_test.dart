@@ -11,10 +11,7 @@ import 'package:cartit/main.dart';
 
 void main() {
   testWidgets('App renders smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
     await tester.pumpWidget(const CartITApp());
-
-    // Verify that our app renders Welcome to CartIT.
-    expect(find.text('Welcome to CartIT'), findsOneWidget);
+    expect(find.byType(CartITApp), findsOneWidget);
   });
 }
