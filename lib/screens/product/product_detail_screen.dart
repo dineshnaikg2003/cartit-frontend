@@ -9,6 +9,7 @@ import '../../providers/cart_provider.dart';
 import '../../providers/product_provider.dart';
 import '../../providers/wishlist_provider.dart';
 import '../cart/cart_screen.dart';
+import '../../widgets/product_image_viewer.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   const ProductDetailScreen({super.key});
@@ -24,6 +25,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
   ProductModel? _product;
   bool _initialised = false;
+
+  void _openImageViewer(List<ProductImageModel> gallery, int initialIndex) {
+    final urls = gallery.map((img) => img.imageUrl).where((url) => url.isNotEmpty).toList();
+    if (urls.isEmpty && _product?.primaryImageUrl != null && _product!.primaryImageUrl.isNotEmpty) {
+      urls.add(_product!.primaryImageUrl);
+    }
+    if (urls.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProductImageViewer(
+          imageUrls: urls,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -278,7 +296,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         // Main Image Gallery Card
         Container(
           width: double.infinity,
-          height: 320,
+          height: 330,
           decoration: BoxDecoration(
             color: cardBg,
             borderRadius: BorderRadius.circular(18),
@@ -296,21 +314,22 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     if (gallery.isEmpty) {
                       return Center(
                         child: Icon(
-                          Icons.image_not_supported_outlined,
-                          size: 80,
+                          Icons.image_outlined,
+                          size: 64,
                           color: subtitleColor,
                         ),
                       );
                     }
-                    return Padding(
-                      padding: const EdgeInsets.all(20),
+                    return GestureDetector(
+                      onTap: () => _openImageViewer(gallery, index),
                       child: Image.network(
                         gallery[index].imageUrl,
+                        width: double.infinity,
                         fit: BoxFit.contain,
                         errorBuilder: (_, __, ___) => Center(
                           child: Icon(
-                            Icons.broken_image_outlined,
-                            size: 60,
+                            Icons.image_outlined,
+                            size: 64,
                             color: subtitleColor,
                           ),
                         ),
@@ -320,16 +339,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 ),
               ),
 
-              // Image Counter Badge (Top Right)
+              // Image Counter Badge (Top Right - Admin Style)
               if (gallery.length > 1)
                 Positioned(
                   top: 12,
                   right: 12,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(16),
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
                       "${_selectedImageIndex + 1}/${gallery.length}",
@@ -348,7 +367,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   top: 12,
                   left: 12,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       color: const Color(0xFFDC2626),
                       borderRadius: BorderRadius.circular(8),
@@ -367,7 +386,29 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           ),
         ),
 
-        // Thumbnail Strip
+        const SizedBox(height: 10),
+
+        // Animated Page Indicator Dots (Admin Style)
+        if (gallery.length > 1)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(gallery.length, (index) {
+              final selected = index == _selectedImageIndex;
+
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                width: selected ? 18 : 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: selected ? AppColors.primary : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              );
+            }),
+          ),
+
+        // Thumbnail Strip (Admin Style)
         if (gallery.length > 1) ...[
           const SizedBox(height: 10),
           SingleChildScrollView(
@@ -379,31 +420,32 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   onTap: () {
                     _pageController.animateToPage(
                       index,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeOut,
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeInOut,
                     );
                   },
-                  child: Container(
-                    width: 52,
-                    height: 52,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: 64,
+                    height: 64,
                     margin: const EdgeInsets.only(right: 8),
+                    padding: EdgeInsets.all(isSelected ? 2 : 1),
                     decoration: BoxDecoration(
-                      color: cardBg,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isSelected ? AppColors.primary : borderColor,
-                        width: isSelected ? 2 : 1,
-                      ),
+                      color: isSelected ? AppColors.primary : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(8),
                       child: Image.network(
                         gallery[index].imageUrl,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Icon(
-                          Icons.image_not_supported_outlined,
-                          size: 18,
-                          color: subtitleColor,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: Colors.grey.shade100,
+                          child: const Icon(
+                            Icons.image_outlined,
+                            size: 18,
+                            color: Colors.grey,
+                          ),
                         ),
                       ),
                     ),
