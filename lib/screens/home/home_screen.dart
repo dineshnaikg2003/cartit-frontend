@@ -252,19 +252,31 @@ class _HomeScreenState extends State<HomeScreen> {
               SliverToBoxAdapter(
                 child: ModernLoaders.productGridSkeleton(context, count: 4),
               )
+            else if (productProvider.featuredHasError ||
+                productProvider.hasError ||
+                (featuredProducts.isEmpty &&
+                    (productProvider.errorMessage != null ||
+                        productProvider.featuredErrorMessage != null)))
+              SliverToBoxAdapter(
+                child: _buildErrorRetryState(
+                  context: context,
+                  message: productProvider.featuredErrorMessage ??
+                      productProvider.errorMessage ??
+                      ProductProvider.defaultErrorMessage,
+                  onRetry: () {
+                    context.read<ProductProvider>().fetchFeaturedProducts();
+                    context.read<ProductProvider>().fetchProducts();
+                  },
+                ),
+              )
             else if (featuredProducts.isEmpty)
               SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-                  child: Center(
-                    child: Text(
-                      'No featured products available',
-                      style: TextStyle(
-                        color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
+                child: _buildErrorRetryState(
+                  context: context,
+                  message: 'No featured products available',
+                  onRetry: () {
+                    context.read<ProductProvider>().fetchFeaturedProducts();
+                  },
                 ),
               )
             else
@@ -508,4 +520,81 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  Widget _buildErrorRetryState({
+    required BuildContext context,
+    required String message,
+    required VoidCallback onRetry,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardBgColor = isDark ? AppColors.darkSurface : Colors.white;
+    final borderColor = isDark ? AppColors.darkCardBorder : AppColors.border;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: cardBgColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.cardShadow.withValues(alpha: isDark ? 0.2 : 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.error.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.cloud_off_rounded,
+              color: AppColors.error,
+              size: 28,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: isDark ? AppColors.darkTitle : AppColors.title,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 14),
+          ElevatedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text(
+              'Retry',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
+

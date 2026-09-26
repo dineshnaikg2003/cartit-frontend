@@ -14,6 +14,9 @@ enum ProductSort {
 }
 
 class ProductProvider extends ChangeNotifier {
+  static const String defaultErrorMessage =
+      'We are unable to fetch the products, please try again later';
+
   final ApiService _apiService = ApiService();
 
   // =========================================================
@@ -47,10 +50,22 @@ class ProductProvider extends ChangeNotifier {
   bool get isDetailLoading =>
       _isDetailLoading;
 
+  bool _hasError = false;
+
+  bool get hasError => _hasError;
+
   String? _errorMessage;
 
   String? get errorMessage =>
       _errorMessage;
+
+  bool _featuredHasError = false;
+
+  bool get featuredHasError => _featuredHasError;
+
+  String? _featuredErrorMessage;
+
+  String? get featuredErrorMessage => _featuredErrorMessage;
 
   // =========================================================
   // FILTER STATE
@@ -82,6 +97,9 @@ class ProductProvider extends ChangeNotifier {
   // =========================================================
 
   Future<void> fetchFeaturedProducts() async {
+    _featuredHasError = false;
+    _featuredErrorMessage = null;
+
     try {
       final response =
           await _apiService.client.get(
@@ -121,10 +139,19 @@ class ProductProvider extends ChangeNotifier {
 
         _applyFeaturedSort();
 
+        _featuredHasError = false;
+        _featuredErrorMessage = null;
+        notifyListeners();
+      } else {
+        _featuredProducts = [];
+        _featuredHasError = true;
+        _featuredErrorMessage = defaultErrorMessage;
         notifyListeners();
       }
     } catch (e) {
       _featuredProducts = [];
+      _featuredHasError = true;
+      _featuredErrorMessage = defaultErrorMessage;
       notifyListeners();
     }
   }
@@ -225,18 +252,19 @@ class ProductProvider extends ChangeNotifier {
             .toList();
 
         _applyCurrentSort();
+        _hasError = false;
+        _errorMessage = null;
       } else {
         _products = [];
-
+        _hasError = true;
         _errorMessage =
             response.data['message'] ??
-                'Failed to load products';
+                defaultErrorMessage;
       }
     } catch (e) {
       _products = [];
-
-      _errorMessage =
-          'Failed to load products';
+      _hasError = true;
+      _errorMessage = defaultErrorMessage;
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -278,19 +306,22 @@ class ProductProvider extends ChangeNotifier {
 
           _selectedProduct =
               product;
+          _hasError = false;
+          _errorMessage = null;
 
           return product;
         }
       }
 
+      _hasError = true;
       _errorMessage =
           response.data['message'] ??
-              'Failed to load product';
+              defaultErrorMessage;
 
       return null;
     } catch (e) {
-      _errorMessage =
-          'Failed to load product';
+      _hasError = true;
+      _errorMessage = defaultErrorMessage;
 
       return null;
     } finally {

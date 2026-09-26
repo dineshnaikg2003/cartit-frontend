@@ -93,8 +93,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final product = _product;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardBgColor = isDark ? AppColors.darkSurface : Colors.white;
-    final borderColor = isDark ? AppColors.darkCardBorder : Colors.grey.shade200;
     final scaffoldBg = isDark ? AppColors.darkBackground : const Color(0xFFF7F8FA);
+
+    final productProvider = context.watch<ProductProvider>();
+    final cartProvider = context.watch<CartProvider>();
+    final wishlistProvider = context.watch<WishlistProvider>();
 
     if (product == null) {
       return Scaffold(
@@ -120,38 +123,92 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           ),
         ),
         body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryLight.withValues(alpha: isDark ? 0.2 : 1.0),
-                  shape: BoxShape.circle,
-                ),
-                child: const CircularProgressIndicator(
-                  color: AppColors.primary,
-                  strokeWidth: 3,
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                'Fetching product details...',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                  color: isDark ? AppColors.darkTitle : AppColors.title,
-                ),
-              ),
-            ],
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (productProvider.isDetailLoading) ...[
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryLight.withValues(alpha: isDark ? 0.2 : 1.0),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const CircularProgressIndicator(
+                      color: AppColors.primary,
+                      strokeWidth: 3,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Fetching product details...',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: isDark ? AppColors.darkTitle : AppColors.title,
+                    ),
+                  ),
+                ] else ...[
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      color: AppColors.error.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.cloud_off_rounded,
+                      size: 40,
+                      color: AppColors.error,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    productProvider.errorMessage ?? ProductProvider.defaultErrorMessage,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: isDark ? AppColors.darkTitle : AppColors.title,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      final args = ModalRoute.of(context)?.settings.arguments;
+                      if (args is int) {
+                        _loadFullProduct(args);
+                      } else if (args is ProductModel) {
+                        _loadFullProduct(args.id);
+                      }
+                    },
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    label: const Text(
+                      'Retry',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       );
     }
-
-    final productProvider = context.watch<ProductProvider>();
-    final cartProvider = context.watch<CartProvider>();
-    final wishlistProvider = context.watch<WishlistProvider>();
 
     final gallery = _getGalleryImages(product);
     final isWishlisted = wishlistProvider.isProductWishlisted(product.id);

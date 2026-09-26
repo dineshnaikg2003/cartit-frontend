@@ -370,23 +370,28 @@ class _ProductListScreenState extends State<ProductListScreen> {
               },
               child: productProvider.isLoading && productProvider.products.isEmpty
                   ? ModernLoaders.productGridSkeleton(context, count: 6)
-                  : productProvider.products.isEmpty
-                      ? _buildEmptyState()
-                      : GridView.builder(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.fromLTRB(16, 6, 16, 30),
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            crossAxisSpacing: 14,
-                            mainAxisSpacing: 16,
-                            childAspectRatio: 0.63,
-                          ),
-                          itemCount: productProvider.products.length,
-                          itemBuilder: (context, index) {
-                            final product = productProvider.products[index];
-                            return ProductCard(product: product);
-                          },
-                        ),
+                  : productProvider.hasError
+                      ? _buildErrorState(
+                          message: productProvider.errorMessage ?? ProductProvider.defaultErrorMessage,
+                          onRetry: () => productProvider.fetchProducts(),
+                        )
+                      : productProvider.products.isEmpty
+                          ? _buildEmptyState()
+                          : GridView.builder(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(16, 6, 16, 30),
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                crossAxisSpacing: 14,
+                                mainAxisSpacing: 16,
+                                childAspectRatio: 0.63,
+                              ),
+                              itemCount: productProvider.products.length,
+                              itemBuilder: (context, index) {
+                                final product = productProvider.products[index];
+                                return ProductCard(product: product);
+                              },
+                            ),
             ),
           ),
         ],
@@ -446,6 +451,75 @@ class _ProductListScreenState extends State<ProductListScreen> {
     );
   }
 
+  Widget _buildErrorState({
+    required String message,
+    required VoidCallback onRetry,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: Container(
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(30),
+        constraints: BoxConstraints(
+          minHeight: MediaQuery.of(context).size.height * 0.5,
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 86,
+              height: 86,
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.cloud_off_rounded,
+                size: 40,
+                color: AppColors.error,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: isDark ? AppColors.darkTitle : AppColors.title,
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 18),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              label: const Text(
+                'Retry',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildEmptyState() {
     return Center(
@@ -510,3 +584,4 @@ class _ProductListScreenState extends State<ProductListScreen> {
     );
   }
 }
+
