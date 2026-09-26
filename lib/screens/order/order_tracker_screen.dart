@@ -133,7 +133,6 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
             if (mounted) setState(() {});
           }
         } else {
-          // Route engine failed or unavailable - NEVER render straight line
           _routePolylinePoints = [];
           _routeDistanceKm = null;
           _routeDurationMins = null;
@@ -149,7 +148,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
 
   void _checkAndRefreshRoute(int orderId, LatLng origin, bool isDeliveryActive) {
     if (isDeliveryActive && !_hasRealDriverLocation) {
-      return; // Await driver location fix
+      return;
     }
 
     if (_routePolylinePoints.isEmpty || _lastRouteFetchTime == null || _lastRouteFetchOrigin == null) {
@@ -163,16 +162,14 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
       _lastRouteFetchOrigin!.latitude, _lastRouteFetchOrigin!.longitude
     );
 
-    // Refresh if >90s AND driver moved > 20 meters
     if (secondsSinceLastFetch > 90 && originMovementMeters > 20.0) {
       _fetchRoadRoute(orderId, origin);
       return;
     }
 
-    // Point-to-segment deviation threshold (> 150m from line segments)
     final minSegDistanceMeters = _minDistanceToPolylineMeters(origin, _routePolylinePoints);
     if (minSegDistanceMeters > 150.0) {
-      debugPrint('[OrderTrackerScreen] Point-to-segment off-route deviation detected (${minSegDistanceMeters.toStringAsFixed(0)}m > 150m). Recalculating route...');
+      debugPrint('[OrderTrackerScreen] Point-to-segment deviation detected (${minSegDistanceMeters.toStringAsFixed(0)}m > 150m). Recalculating route...');
       _fetchRoadRoute(orderId, origin);
     }
   }
@@ -197,7 +194,6 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
       _deliveryLocation = LatLng(addr.latitude!, addr.longitude!);
       _hasAddressCoordinatesError = false;
     } else {
-      // Default placeholder when coordinates missing - flag address-location error
       _deliveryLocation = const LatLng(12.9716, 77.5946);
       _hasAddressCoordinatesError = true;
     }
@@ -335,6 +331,24 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     );
   }
 
+  void _zoomIn() {
+    _mapController?.animateCamera(CameraUpdate.zoomIn());
+  }
+
+  void _zoomOut() {
+    _mapController?.animateCamera(CameraUpdate.zoomOut());
+  }
+
+  void _recenterOnDriver() {
+    if (_hasRealDriverLocation && _driverLocation != null && !_isLocationStale) {
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLngZoom(_driverLocation!, 16.0),
+      );
+    } else {
+      _fitMapBounds();
+    }
+  }
+
   Set<Marker> _buildGoogleMapMarkers(bool isDeliveryActive, OrderModel currentOrder) {
     final markers = <Marker>{
       // Store Hub Marker
@@ -367,7 +381,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
           rotation: _driverHeading ?? 0.0,
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
           infoWindow: InfoWindow(
-            title: 'Delivery Partner ($_driverName)',
+            title: 'Delivery Partner (${currentOrder.deliveryBoyName ?? _driverName})',
             snippet: 'Real-time GPS Location',
           ),
         ),
@@ -393,7 +407,6 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
   }
 
   Future<void> _resolveActualLocations() async {
-    // FETCH REAL STORE LOCATION DETAILS FROM BACKEND (GET /api/store)
     try {
       final response = await ApiService().client.get(ApiConstants.store);
       if (response.statusCode == 200 && response.data['success'] == true) {
@@ -414,7 +427,6 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
 
     if (!mounted) return;
 
-    // FETCH REAL CUSTOMER DELIVERY ADDRESS LOCATION
     final orderProvider = context.read<OrderProvider>();
     final currentOrder = orderProvider.orders.firstWhere(
       (o) => o.id == widget.order.id,
@@ -467,11 +479,93 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     return s == 'SHIPPED' || s == 'OUT_FOR_DELIVERY' || s == 'ARRIVED_AT_CUSTOMER';
   }
 
+  void _showHelpBottomSheet(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Need Help with Order #${widget.order.orderNumber}?',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                color: isDark ? AppColors.darkTitle : AppColors.title,
+              ),
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.headset_mic_rounded, color: AppColors.primary, size: 20),
+              ),
+              title: const Text('Contact Customer Support', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+              subtitle: const Text('Speak directly with our 24/7 help desk', style: TextStyle(fontSize: 12)),
+              onTap: () {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Connecting to CartIT Customer Support...'),
+                    backgroundColor: AppColors.primary,
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.secondary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.chat_bubble_outline_rounded, color: AppColors.secondary, size: 20),
+              ),
+              title: const Text('Live Chat Assistance', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+              subtitle: const Text('Instant chat resolution for order issues', style: TextStyle(fontSize: 12)),
+              onTap: () {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Opening live chat assistant...'),
+                    backgroundColor: AppColors.primary,
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // Fetch live order from provider matching widget.order.id
     final orderProvider = context.watch<OrderProvider>();
     final currentOrder = orderProvider.orders.firstWhere(
       (o) => o.id == widget.order.id,
@@ -481,11 +575,56 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
     final status = currentOrder.status.toUpperCase();
     final isDeliveryActive = _isOutForDelivery(status);
 
+    // Compute ETA title string
+    String etaTitle = 'Calculating arrival time...';
+    if (status == 'DELIVERED') {
+      etaTitle = 'Delivered';
+    } else if (status == 'CANCELLED') {
+      etaTitle = 'Cancelled';
+    } else if (isDeliveryActive && _hasRealDriverLocation && !_isLocationStale) {
+      if (_routeDurationMins != null) {
+        final mins = _routeDurationMins!.round();
+        etaTitle = mins <= 1 ? '1 min' : '$mins mins';
+      }
+    } else if (isDeliveryActive && _isLocationStale) {
+      etaTitle = 'Temporarily Unavailable';
+    }
+
+    // Compute Subtitle Delivery Message
+    String deliveryMessage = 'Your order is on the way';
+    if (status == 'DELIVERED') {
+      deliveryMessage = 'Your order has been delivered';
+    } else if (status == 'CANCELLED') {
+      deliveryMessage = 'This order was cancelled';
+    } else if (isDeliveryActive && _hasRealDriverLocation && !_isLocationStale) {
+      if (_routeDurationMins != null && _routeDurationMins! <= 1.0) {
+        deliveryMessage = 'Your delivery partner has reached your location';
+      } else if (_routeDurationMins != null && _routeDurationMins! <= 4.0) {
+        deliveryMessage = 'Your delivery partner is almost there';
+      } else {
+        deliveryMessage = 'Your order is on the way';
+      }
+    } else if (isDeliveryActive && _isLocationStale) {
+      deliveryMessage = 'Live location temporarily unavailable';
+    } else if (isDeliveryActive && !_hasRealDriverLocation) {
+      deliveryMessage = 'Waiting for your delivery partner\'s live location…';
+    } else if (status == 'CONFIRMED' || status == 'PENDING' || status == 'PLACED') {
+      deliveryMessage = 'Your order is being prepared';
+    } else if (status == 'PACKED' || status == 'ARRIVED_AT_STORE') {
+      deliveryMessage = 'Your order is packed and ready';
+    }
+
     return Scaffold(
       backgroundColor: isDark ? AppColors.darkBackground : AppColors.background,
+
+      // -----------------------------------------------------------------------
+      // 1. HEADER (COMPACT APP BAR)
+      // -----------------------------------------------------------------------
       appBar: AppBar(
         backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
-        elevation: 0,
+        elevation: 0.5,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: AppColors.cardShadow,
         leading: IconButton(
           icon: Icon(
             Icons.arrow_back_ios_new_rounded,
@@ -494,36 +633,35 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
           ),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Order #${currentOrder.orderNumber}',
-              style: TextStyle(
-                color: isDark ? AppColors.darkTitle : AppColors.title,
-                fontWeight: FontWeight.w900,
-                fontSize: 16,
-              ),
-            ),
-            Text(
-              isDeliveryActive ? 'Live Delivery Map Tracking' : 'Live Order Tracking',
-              style: TextStyle(
-                color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
-                fontSize: 11,
-              ),
-            ),
-          ],
+        title: Text(
+          'Order #${currentOrder.orderNumber}',
+          style: TextStyle(
+            color: isDark ? AppColors.darkTitle : AppColors.title,
+            fontWeight: FontWeight.w900,
+            fontSize: 16,
+            letterSpacing: -0.3,
+          ),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.my_location_rounded, color: AppColors.primary, size: 20),
-            onPressed: _fitMapBounds,
+          TextButton.icon(
+            onPressed: () => _showHelpBottomSheet(context),
+            icon: const Icon(Icons.help_outline_rounded, size: 16, color: AppColors.primary),
+            label: const Text(
+              'Help',
+              style: TextStyle(
+                color: AppColors.primary,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+            ),
           ),
+          const SizedBox(width: 4),
         ],
       ),
+
       body: SingleChildScrollView(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (_hasAddressCoordinatesError)
               Container(
@@ -545,76 +683,177 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
               ),
 
             // -----------------------------------------------------------------
-            // 1. EMBEDDED MAP VIEW AT THE TOP OF THE TRACKER SCREEN
+            // 2. LIVE MAP AT THE TOP
             // -----------------------------------------------------------------
-            Container(
-              height: 260,
+            SizedBox(
+              height: 310,
               width: double.infinity,
-              decoration: const BoxDecoration(
-                boxShadow: [
-                  BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 4)),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
-                child: Stack(
-                  children: [
-                    GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                        target: (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null)
-                            ? _driverLocation!
-                            : _deliveryLocation,
-                        zoom: 14.2,
-                      ),
-                      markers: _buildGoogleMapMarkers(isDeliveryActive, currentOrder),
-                      polylines: _buildGoogleMapPolylines(),
-                      myLocationEnabled: false,
-                      zoomControlsEnabled: false,
-                      compassEnabled: true,
-                      mapToolbarEnabled: false,
-                      onMapCreated: (controller) {
-                        _mapController = controller;
-                        _fitMapBounds();
-                      },
+              child: Stack(
+                children: [
+                  GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: (isDeliveryActive && _hasRealDriverLocation && _driverLocation != null)
+                          ? _driverLocation!
+                          : _deliveryLocation,
+                      zoom: 14.5,
                     ),
+                    markers: _buildGoogleMapMarkers(isDeliveryActive, currentOrder),
+                    polylines: _buildGoogleMapPolylines(),
+                    myLocationEnabled: false,
+                    zoomControlsEnabled: false,
+                    compassEnabled: true,
+                    mapToolbarEnabled: false,
+                    onMapCreated: (controller) {
+                      _mapController = controller;
+                      _fitMapBounds();
+                    },
+                  ),
 
-                    // Top ETA / GPS Status Badge overlay on map when delivery active
-                    if (isDeliveryActive)
-                      Positioned(
-                        top: 12,
-                        left: 14,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  // Floating Map Controls (Top Right: Recenter & Zoom)
+                  Positioned(
+                    top: 14,
+                    right: 14,
+                    child: Column(
+                      children: [
+                        Container(
                           decoration: BoxDecoration(
-                            color: (_hasRealDriverLocation && !_isLocationStale) ? Colors.white : Colors.amber.shade900,
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
+                            color: isDark ? AppColors.darkSurface : Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2))],
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
+                          child: IconButton(
+                            icon: const Icon(Icons.my_location_rounded, color: AppColors.primary, size: 20),
+                            onPressed: _recenterOnDriver,
+                            tooltip: 'Center on Driver / Fit Route',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: isDark ? AppColors.darkSurface : Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2))],
+                          ),
+                          child: Column(
                             children: [
-                              Icon(
-                                (_hasRealDriverLocation && !_isLocationStale) ? Icons.navigation_rounded : Icons.gps_off_rounded,
-                                color: (_hasRealDriverLocation && !_isLocationStale) ? AppColors.primary : Colors.white,
-                                size: 16,
+                              IconButton(
+                                icon: Icon(Icons.add, color: isDark ? AppColors.darkTitle : AppColors.title, size: 18),
+                                onPressed: _zoomIn,
+                                padding: const EdgeInsets.all(8),
+                                constraints: const BoxConstraints(),
                               ),
-                              const SizedBox(width: 6),
-                              Text(
-                                (_hasRealDriverLocation && !_isLocationStale)
-                                    ? (_routePolylinePoints.isNotEmpty && _routeDurationMins != null && _routeDistanceKm != null
-                                        ? 'Arriving in ${_routeDurationMins!.toStringAsFixed(0)} mins (${_routeDistanceKm!.toStringAsFixed(1)} km)'
-                                        : (_routePolylinePoints.isEmpty ? 'Road Route Unavailable' : 'Live Driver GPS Active'))
-                                    : (_isLocationStale ? 'Driver GPS Signal Stale' : 'Awaiting Driver GPS Update...'),
-                                style: TextStyle(
-                                  color: (_hasRealDriverLocation && !_isLocationStale) ? AppColors.title : Colors.white,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 11.5,
-                                ),
+                              Divider(height: 1, color: isDark ? AppColors.darkCardBorder : AppColors.border),
+                              IconButton(
+                                icon: Icon(Icons.remove, color: isDark ? AppColors.darkTitle : AppColors.title, size: 18),
+                                onPressed: _zoomOut,
+                                padding: const EdgeInsets.all(8),
+                                constraints: const BoxConstraints(),
                               ),
                             ],
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // -----------------------------------------------------------------
+            // 3. ETA / DELIVERY MESSAGE BELOW MAP
+            // -----------------------------------------------------------------
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.primary,
+                      const Color(0xFF008040),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            status == 'DELIVERED'
+                                ? 'DELIVERY COMPLETED'
+                                : (isDeliveryActive ? 'ARRIVING IN' : 'ESTIMATED ARRIVAL'),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.8,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        if (isDeliveryActive && _hasRealDriverLocation && !_isLocationStale && _routeDistanceKm != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.navigation_rounded, color: Colors.white, size: 12),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${_routeDistanceKm!.toStringAsFixed(1)} km away',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      etaTitle,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 32,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.8,
                       ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      deliveryMessage,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -623,92 +862,43 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
             const SizedBox(height: 16),
 
             // -----------------------------------------------------------------
-            // 2. LIVE HERO STATUS BANNER BELOW MAP
+            // 4. DELIVERY PARTNER CARD
             // -----------------------------------------------------------------
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: _getStatusHeaderColor(status),
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _getStatusHeaderColor(status).withValues(alpha: 0.3),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(_getStatusHeaderIcon(status), color: Colors.white, size: 26),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _getStatusHeaderTitle(status),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 15.5,
-                              letterSpacing: -0.2,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _getStatusHeaderSubtitle(status),
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.88),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            // Delivery Partner Info Box (Visible when Out for Delivery)
-            if (isDeliveryActive) ...[
-              const SizedBox(height: 14),
+            if (isDeliveryActive || status == 'DELIVERED' || status == 'PACKED')
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: isDark ? AppColors.darkSurface : Colors.white,
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(18),
                     border: Border.all(
                       color: isDark ? AppColors.darkCardBorder : AppColors.border,
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.cardShadow.withValues(alpha: isDark ? 0.2 : 0.04),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                   child: Row(
                     children: [
                       Container(
-                        width: 42,
-                        height: 42,
+                        width: 46,
+                        height: 46,
                         decoration: BoxDecoration(
                           color: AppColors.primary.withValues(alpha: 0.12),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.person_pin_rounded, color: AppColors.primary, size: 24),
+                        child: const Icon(
+                          Icons.person_rounded,
+                          color: AppColors.primary,
+                          size: 26,
+                        ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -716,16 +906,17 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                             Text(
                               currentOrder.deliveryBoyName ?? _driverName,
                               style: TextStyle(
-                                fontSize: 14,
+                                fontSize: 15,
                                 fontWeight: FontWeight.w900,
                                 color: isDark ? AppColors.darkTitle : AppColors.title,
                               ),
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              'Delivery Partner • CartIT Express (${currentOrder.deliveryBoyPhone ?? _driverPhone})',
+                              'Delivery Partner · CartIT Express',
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
                                 color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
                               ),
                             ),
@@ -734,11 +925,11 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                       ),
                       Container(
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.15),
+                          color: AppColors.primary.withValues(alpha: 0.12),
                           shape: BoxShape.circle,
                         ),
                         child: IconButton(
-                          icon: const Icon(Icons.phone_rounded, color: AppColors.primary, size: 18),
+                          icon: const Icon(Icons.phone_rounded, color: AppColors.primary, size: 20),
                           onPressed: () {
                             final name = currentOrder.deliveryBoyName ?? _driverName;
                             final phone = currentOrder.deliveryBoyPhone ?? _driverPhone;
@@ -755,139 +946,12 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                   ),
                 ),
               ),
-            ],
 
-            const SizedBox(height: 16),
-
-            // -----------------------------------------------------------------
-            // 3. 5-STEP ORDER PROGRESS TIMELINE STEPPER
-            // -----------------------------------------------------------------
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: isDark ? AppColors.darkSurface : Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: isDark ? AppColors.darkCardBorder : AppColors.border,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Order Progress',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w900,
-                        color: isDark ? AppColors.darkTitle : AppColors.title,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    _build5StepTimelineStepper(status, isDark),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // -----------------------------------------------------------------
-            // 4. EMBEDDED RATING CARD IF DELIVERED
-            // -----------------------------------------------------------------
-            if (status == 'DELIVERED') ...[
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _buildEmbeddedRatingCard(context, currentOrder, isDark),
-              ),
+            if (isDeliveryActive || status == 'DELIVERED' || status == 'PACKED')
               const SizedBox(height: 16),
-            ],
 
             // -----------------------------------------------------------------
-            // 5. ITEMS IN THIS ORDER LIST CARD
-            // -----------------------------------------------------------------
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isDark ? AppColors.darkSurface : Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: isDark ? AppColors.darkCardBorder : AppColors.border,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-                      child: Text(
-                        'Items in this Order (${currentOrder.items.length})',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                          color: isDark ? AppColors.darkTitle : AppColors.title,
-                        ),
-                      ),
-                    ),
-                    Divider(height: 1, color: isDark ? AppColors.darkCardBorder : AppColors.border),
-                    ListView.separated(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: currentOrder.items.length,
-                      separatorBuilder: (context, index) => Divider(height: 1, color: isDark ? AppColors.darkCardBorder : AppColors.border),
-                      itemBuilder: (context, index) {
-                        final item = currentOrder.items[index];
-                        return ListTile(
-                          leading: Container(
-                            width: 38,
-                            height: 38,
-                            decoration: BoxDecoration(
-                              color: AppColors.primary.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(
-                              Icons.shopping_bag_outlined,
-                              color: AppColors.primary,
-                              size: 18,
-                            ),
-                          ),
-                          title: Text(
-                            item.productName,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 13.5,
-                              color: isDark ? AppColors.darkTitle : AppColors.title,
-                            ),
-                          ),
-                          subtitle: Text(
-                            'Qty: ${item.quantity} × ${Formatters.currency(item.price)}',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
-                            ),
-                          ),
-                          trailing: Text(
-                            Formatters.currency(item.totalPrice),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.primary,
-                              fontSize: 13.5,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // -----------------------------------------------------------------
-            // 6. DELIVERY ADDRESS CARD
+            // 5. DELIVERY ADDRESS
             // -----------------------------------------------------------------
             if (currentOrder.shippingAddress != null) ...[
               Padding(
@@ -901,42 +965,51 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                     border: Border.all(
                       color: isDark ? AppColors.darkCardBorder : AppColors.border,
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.cardShadow.withValues(alpha: isDark ? 0.2 : 0.04),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        'DELIVERING TO',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       Row(
                         children: [
-                          const Icon(Icons.location_on_rounded, color: AppColors.primary, size: 20),
+                          const Icon(Icons.home_rounded, color: AppColors.primary, size: 20),
                           const SizedBox(width: 8),
                           Text(
-                            'Delivery Address',
+                            currentOrder.shippingAddress!.fullName,
                             style: TextStyle(
-                              fontSize: 15,
+                              fontSize: 14,
                               fontWeight: FontWeight.w900,
                               color: isDark ? AppColors.darkTitle : AppColors.title,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        currentOrder.shippingAddress!.fullName,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13.5,
-                          color: isDark ? AppColors.darkTitle : AppColors.title,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 6),
                       Text(
                         '${currentOrder.shippingAddress!.street}, ${currentOrder.shippingAddress!.city}, ${currentOrder.shippingAddress!.state} - ${currentOrder.shippingAddress!.zipCode}',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 12.5,
+                          height: 1.3,
                           color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 4),
                       Text(
                         'Phone: ${currentOrder.shippingAddress!.phone}',
                         style: TextStyle(
@@ -952,7 +1025,151 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
             ],
 
             // -----------------------------------------------------------------
-            // 7. BILL & PAYMENT DETAILS
+            // 6. ORDER DETAILS (REQUIRED ITEM LIST)
+            // -----------------------------------------------------------------
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDark ? AppColors.darkSurface : Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: isDark ? AppColors.darkCardBorder : AppColors.border,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.cardShadow.withValues(alpha: isDark ? 0.2 : 0.04),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Order Details',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                              color: isDark ? AppColors.darkTitle : AppColors.title,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '${currentOrder.items.length} ${currentOrder.items.length == 1 ? 'item' : 'items'}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Divider(height: 1, color: isDark ? AppColors.darkCardBorder : AppColors.border),
+                    ListView.separated(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: currentOrder.items.length,
+                      separatorBuilder: (context, index) => Divider(
+                        height: 1,
+                        color: isDark ? AppColors.darkCardBorder : AppColors.border,
+                      ),
+                      itemBuilder: (context, index) {
+                        final item = currentOrder.items[index];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  color: isDark ? AppColors.darkBackground : AppColors.background,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: isDark ? AppColors.darkCardBorder : AppColors.border.withValues(alpha: 0.6),
+                                  ),
+                                ),
+                                clipBehavior: Clip.antiAlias,
+                                child: item.product?.primaryImageUrl != null && item.product!.primaryImageUrl.isNotEmpty
+                                    ? Image.network(
+                                        item.product!.primaryImageUrl,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, error, stackTrace) => const Icon(
+                                          Icons.shopping_bag_outlined,
+                                          color: AppColors.primary,
+                                          size: 20,
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.shopping_bag_outlined,
+                                        color: AppColors.primary,
+                                        size: 20,
+                                      ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.productName,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 13.5,
+                                        color: isDark ? AppColors.darkTitle : AppColors.title,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      'Qty: ${item.quantity}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                Formatters.currency(item.totalPrice),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  color: isDark ? AppColors.darkTitle : AppColors.title,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // -----------------------------------------------------------------
+            // 7. PRICE SUMMARY
             // -----------------------------------------------------------------
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -964,24 +1181,31 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                   border: Border.all(
                     color: isDark ? AppColors.darkCardBorder : AppColors.border,
                   ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.cardShadow.withValues(alpha: isDark ? 0.2 : 0.04),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Bill Details',
+                      'Price Summary',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w900,
                         color: isDark ? AppColors.darkTitle : AppColors.title,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Item Total',
+                          'Item total',
                           style: TextStyle(
                             fontSize: 13,
                             color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
@@ -997,36 +1221,12 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                         ),
                       ],
                     ),
-                    if (currentOrder.discountAmount > 0) ...[
-                      const SizedBox(height: 6),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Discount Savings',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AppColors.success,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          Text(
-                            '-${Formatters.currency(currentOrder.discountAmount)}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.success,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Delivery Fee',
+                          'Delivery fee',
                           style: TextStyle(
                             fontSize: 13,
                             color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
@@ -1046,15 +1246,39 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                         ),
                       ],
                     ),
-                    Divider(height: 20, color: isDark ? AppColors.darkCardBorder : AppColors.border),
+                    if (currentOrder.discountAmount > 0) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Discount',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.success,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            '-${Formatters.currency(currentOrder.discountAmount)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.success,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    Divider(height: 22, color: isDark ? AppColors.darkCardBorder : AppColors.border),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Total Paid (${currentOrder.paymentMethod})',
+                          'Total',
                           style: TextStyle(
                             fontWeight: FontWeight.w900,
-                            fontSize: 14,
+                            fontSize: 15,
                             color: isDark ? AppColors.darkTitle : AppColors.title,
                           ),
                         ),
@@ -1062,7 +1286,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                           Formatters.currency(currentOrder.finalAmount > 0 ? currentOrder.finalAmount : currentOrder.totalAmount),
                           style: const TextStyle(
                             fontWeight: FontWeight.w900,
-                            fontSize: 16,
+                            fontSize: 17,
                             color: AppColors.primary,
                           ),
                         ),
@@ -1073,9 +1297,18 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
               ),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
 
-            // CANCEL ORDER OPTION
+            // RATING CARD IF DELIVERED
+            if (status == 'DELIVERED') ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _buildEmbeddedRatingCard(context, currentOrder, isDark),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // CANCEL ORDER OPTION IF PENDING/CONFIRMED
             if (status == 'PENDING' || status == 'CONFIRMED') ...[
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1124,125 +1357,17 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
                   ),
                 ),
               ),
+              const SizedBox(height: 16),
             ],
 
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
           ],
         ),
       ),
     );
   }
 
-  /// -------------------------------------------------------------------------
-  /// 5-STEP TIMELINE STEPPER WITH ORDER PACKED STATUS
-  /// -------------------------------------------------------------------------
-  Widget _build5StepTimelineStepper(String status, bool isDark) {
-    int currentStepIndex = 1;
-    if (status == 'CONFIRMED') {
-      currentStepIndex = 2; // Getting Packed
-    } else if (status == 'PACKED' || status == 'ARRIVED_AT_STORE') {
-      currentStepIndex = 3; // Order Packed
-    } else if (status == 'SHIPPED' || status == 'OUT_FOR_DELIVERY' || status == 'ARRIVED_AT_CUSTOMER') {
-      currentStepIndex = 4; // Out for Delivery
-    } else if (status == 'DELIVERED') {
-      currentStepIndex = 5; // Delivered
-    } else if (status == 'CANCELLED') {
-      currentStepIndex = 0;
-    }
-
-    final steps = [
-      {'title': 'Order Placed', 'sub': 'Order confirmed'},
-      {'title': 'Getting Packed', 'sub': 'Items selected at store'},
-      {'title': 'Order Packed', 'sub': 'Items packed & ready for pickup'},
-      {'title': 'Out for Delivery', 'sub': 'Partner on the way (Map live)'},
-      {'title': 'Delivered', 'sub': 'Successfully arrived at doorstep'},
-    ];
-
-    return Column(
-      children: List.generate(steps.length, (index) {
-        final stepNum = index + 1;
-        final isPassed = currentStepIndex >= stepNum && currentStepIndex > 0;
-        final isCurrent = currentStepIndex == stepNum;
-        final isLast = index == steps.length - 1;
-
-        Color dotColor = Colors.grey.shade400;
-        if (isPassed) dotColor = const Color(0xFF00B259);
-        if (isCurrent) dotColor = AppColors.primary;
-        if (status == 'CANCELLED') dotColor = Colors.grey.shade500;
-
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
-              children: [
-                Container(
-                  width: 26,
-                  height: 26,
-                  decoration: BoxDecoration(
-                    color: dotColor.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: dotColor, width: 2),
-                  ),
-                  child: Center(
-                    child: isPassed
-                        ? Icon(Icons.check_rounded, color: dotColor, size: 15)
-                        : Text(
-                            '$stepNum',
-                            style: TextStyle(
-                              color: dotColor,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 10.5,
-                            ),
-                          ),
-                  ),
-                ),
-                if (!isLast)
-                  Container(
-                    width: 2,
-                    height: 34,
-                    color: isPassed ? const Color(0xFF00B259) : Colors.grey.shade300,
-                  ),
-              ],
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      steps[index]['title']!,
-                      style: TextStyle(
-                        fontWeight: isPassed ? FontWeight.w900 : FontWeight.w600,
-                        fontSize: 13.5,
-                        color: isPassed
-                            ? (isDark ? AppColors.darkTitle : AppColors.title)
-                            : (isDark ? AppColors.darkSubtitle : Colors.grey.shade500),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      steps[index]['sub']!,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      }),
-    );
-  }
-
-  /// -------------------------------------------------------------------------
   /// EMBEDDED RATING CARD IF DELIVERED
-  /// -------------------------------------------------------------------------
   Widget _buildEmbeddedRatingCard(BuildContext context, OrderModel order, bool isDark) {
     final alreadyRated = order.rating != null && order.rating! > 0;
 
@@ -1315,7 +1440,7 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
           ),
           const SizedBox(height: 10),
           Text(
-            'How was your 10-minute delivery?',
+            'How was your delivery?',
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w900,
@@ -1433,95 +1558,5 @@ class _OrderTrackerScreenState extends State<OrderTrackerScreen> with SingleTick
         ],
       ),
     );
-  }
-
-  // Status Theme Helpers
-  Color _getStatusHeaderColor(String status) {
-    switch (status) {
-      case 'PLACED':
-      case 'PENDING':
-      case 'CONFIRMED':
-        return const Color(0xFF2563EB); // Blue
-      case 'PACKED':
-      case 'ARRIVED_AT_STORE':
-      case 'SHIPPED':
-      case 'OUT_FOR_DELIVERY':
-      case 'ARRIVED_AT_CUSTOMER':
-        return const Color(0xFF00B259); // Zepto Green
-      case 'DELIVERED':
-        return const Color(0xFF10B981); // Emerald
-      case 'CANCELLED':
-        return const Color(0xFFEF4444); // Red
-      default:
-        return AppColors.primary;
-    }
-  }
-
-  String _getStatusHeaderTitle(String status) {
-    switch (status) {
-      case 'PLACED':
-      case 'PENDING':
-        return 'Order Placed & Confirmed';
-      case 'CONFIRMED':
-        return 'Store Preparing Your Order';
-      case 'PACKED':
-      case 'ARRIVED_AT_STORE':
-        return 'Order Packed & Ready for Pickup';
-      case 'SHIPPED':
-      case 'OUT_FOR_DELIVERY':
-      case 'ARRIVED_AT_CUSTOMER':
-        return 'Out for Delivery';
-      case 'DELIVERED':
-        return 'Order Successfully Delivered! 🎉';
-      case 'CANCELLED':
-        return 'Order Cancelled';
-      default:
-        return 'Order Processing';
-    }
-  }
-
-  String _getStatusHeaderSubtitle(String status) {
-    switch (status) {
-      case 'PLACED':
-      case 'PENDING':
-        return 'We have received your order. Dark store team is selecting items.';
-      case 'CONFIRMED':
-        return 'Items are being packed at the nearest dark store hub.';
-      case 'PACKED':
-      case 'ARRIVED_AT_STORE':
-        return 'Order is packed and ready for delivery partner pickup.';
-      case 'SHIPPED':
-      case 'OUT_FOR_DELIVERY':
-      case 'ARRIVED_AT_CUSTOMER':
-        return 'Delivery partner is on the way to your location.';
-      case 'DELIVERED':
-        return 'Your items were delivered in 10 minutes.';
-      case 'CANCELLED':
-        return 'This order has been cancelled.';
-      default:
-        return 'Order status updated live.';
-    }
-  }
-
-  IconData _getStatusHeaderIcon(String status) {
-    switch (status) {
-      case 'PLACED':
-      case 'PENDING':
-        return Icons.receipt_long_rounded;
-      case 'CONFIRMED':
-      case 'PACKED':
-      case 'ARRIVED_AT_STORE':
-        return Icons.inventory_2_rounded;
-      case 'SHIPPED':
-      case 'OUT_FOR_DELIVERY':
-      case 'ARRIVED_AT_CUSTOMER':
-        return Icons.local_shipping_rounded;
-      case 'DELIVERED':
-        return Icons.check_circle_rounded;
-      case 'CANCELLED':
-        return Icons.cancel_rounded;
-      default:
-        return Icons.local_mall_rounded;
-    }
   }
 }
