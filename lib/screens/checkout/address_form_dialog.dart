@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import '../../app/app_colors.dart';
 import '../../models/address_model.dart';
@@ -94,9 +95,13 @@ class _AddressFormDialogState extends State<AddressFormDialog> {
   }
 
   Future<void> _changeLocation() async {
+    final initialPos = (_latitude != null && _longitude != null && _latitude != 0.0 && _longitude != 0.0)
+        ? LatLng(_latitude!, _longitude!)
+        : null;
+
     final result = await Navigator.push<Map<String, String>>(
       context,
-      MaterialPageRoute(builder: (_) => const LocationPickerScreen()),
+      MaterialPageRoute(builder: (_) => LocationPickerScreen(initialPosition: initialPos)),
     );
 
     if (result != null && mounted) {
@@ -106,6 +111,16 @@ class _AddressFormDialogState extends State<AddressFormDialog> {
 
   void _onSave() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (_latitude == null || _longitude == null || _latitude == 0.0 || _longitude == 0.0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select location on map to confirm exact delivery GPS coordinates'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
 
     final addressProvider = context.read<AddressProvider>();
 

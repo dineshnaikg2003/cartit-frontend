@@ -25,7 +25,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   bool _isSearching = false;
   bool _isDragging = false;
   bool _isSatellite = false;
-  bool? _overrideMapDark; // null = follow system theme, true = force dark map, false = force light map
+  bool? _overrideMapDark;
   List<Map<String, dynamic>> _searchResults = [];
 
   String _areaTitle = 'Fetching location...';
@@ -33,13 +33,17 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   String _city = '';
   String _state = '';
   String _pincode = '';
-  String _displayAddress = 'Drag map to pin exact delivery location';
+  String _displayAddress = 'Move map to pin exact delivery location';
 
   @override
   void initState() {
     super.initState();
-    _currentCenter = widget.initialPosition ?? const LatLng(12.9716, 77.5946); // Default Bengaluru
-    _initCurrentLocation();
+    _currentCenter = widget.initialPosition ?? const LatLng(12.9716, 77.5946);
+    if (widget.initialPosition != null) {
+      _reverseGeocode(_currentCenter);
+    } else {
+      _initCurrentLocation();
+    }
   }
 
   @override
@@ -57,10 +61,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Location services (GPS) are turned off. Please turn on GPS location.'),
+              content: const Text('Location services (GPS) are turned off. Please turn on GPS.'),
               backgroundColor: AppColors.warning,
               action: SnackBarAction(
-                label: 'GPS SETTINGS',
+                label: 'SETTINGS',
                 textColor: Colors.white,
                 onPressed: () => Geolocator.openLocationSettings(),
               ),
@@ -79,7 +83,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Location permission denied. You can drag map pin manually.'),
+              content: const Text('Location permission denied. Move map manually to pin address.'),
               backgroundColor: AppColors.warning,
               action: SnackBarAction(
                 label: 'PERMISSIONS',
@@ -97,8 +101,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       try {
         position = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.medium,
-            timeLimit: Duration(seconds: 10),
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 8),
           ),
         );
       } catch (_) {
@@ -202,7 +206,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
           final fullStreet = streetParts.isNotEmpty ? streetParts.join(', ') : (district.isNotEmpty ? district : ct);
 
-          // Priority area header: POI name > Street + Suburb > Street > District > City
           final areaName = name.isNotEmpty
               ? name
               : (streetName.isNotEmpty
@@ -284,7 +287,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
           }
         }
 
-        // Priority header title: POI name > Road + Suburb > Road > Suburb > City
         final areaName = name.isNotEmpty
             ? name
             : (road.toString().isNotEmpty
@@ -423,6 +425,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       'zipCode': _pincode,
       'latitude': _currentCenter.latitude.toString(),
       'longitude': _currentCenter.longitude.toString(),
+      'areaTitle': _areaTitle,
+      'displayAddress': _displayAddress,
     });
   }
 
@@ -442,6 +446,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         top: false,
         child: Stack(
           children: [
+            // -----------------------------------------------------------------
+            // FULL INTERACTIVE GOOGLE MAP
+            // -----------------------------------------------------------------
             GoogleMap(
               initialCameraPosition: CameraPosition(
                 target: _currentCenter,
@@ -473,22 +480,24 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
               },
             ),
 
-            // Center Pin Marker with Exact Google Maps Needle Alignment
+            // -----------------------------------------------------------------
+            // 1 & 2. FIXED CENTER CARTIT LOCATION PIN (CartIT Custom Design)
+            // -----------------------------------------------------------------
             IgnorePointer(
               child: Center(
                 child: Transform.translate(
-                  offset: const Offset(0, -24), // Offset half of the pin height (48px / 2) so pin tip points to exact map center
+                  offset: const Offset(0, -28),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Animated Floating Delivery Tooltip
+                      // Animated Floating Delivery Tooltip Badge
                       AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                         decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF0E2319) : Colors.black.withValues(alpha: 0.88),
+                          color: isDark ? const Color(0xFF0D2117) : Colors.black.withValues(alpha: 0.90),
                           borderRadius: BorderRadius.circular(20),
-                          border: isDark ? Border.all(color: AppColors.darkCardBorder) : null,
+                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
                           boxShadow: const [
                             BoxShadow(
                               color: Colors.black26,
@@ -500,48 +509,94 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              _isDragging ? Icons.location_searching_rounded : Icons.check_circle_rounded,
-                              color: _isDragging ? AppColors.secondary : AppColors.primary,
-                              size: 14,
+                            if (_isGeocoding) ...[
+                              const SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.secondary),
+                              ),
+                              const SizedBox(width: 6),
+                              const Text(
+                                'Finding this location…',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ] else ...[
+                              Icon(
+                                _isDragging ? Icons.location_searching_rounded : Icons.check_circle_rounded,
+                                color: _isDragging ? AppColors.secondary : AppColors.primary,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _isDragging ? 'Locating exact building...' : 'Order will be delivered here',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+
+                      // Custom CartIT Pin Container with Lift Animation & Pointer Tip
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        transform: Matrix4.translationValues(0, _isDragging ? -12 : 0, 0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: AppColors.primary,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 2.5),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.primary.withValues(alpha: 0.4),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.shopping_bag_rounded,
+                                  color: Colors.white,
+                                  size: 22,
+                                ),
+                              ),
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _isDragging ? 'Locating exact building...' : 'Order will be delivered here',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
+                            ClipPath(
+                              clipper: _PinTriangleClipper(),
+                              child: Container(
+                                width: 14,
+                                height: 10,
+                                color: AppColors.primary,
                               ),
                             ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 6),
 
-                      // Animated Google Maps Needle Pin
+                      const SizedBox(height: 2),
+
+                      // Ground Shadow Pulse
                       AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        transform: Matrix4.translationValues(0, _isDragging ? -12 : 0, 0),
-                        child: Stack(
-                          alignment: Alignment.bottomCenter,
-                          children: [
-                            // Ground shadow pulse
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              width: _isDragging ? 8 : 16,
-                              height: _isDragging ? 3 : 6,
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: _isDragging ? 0.15 : 0.35),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                            const Icon(
-                              Icons.location_on_rounded,
-                              size: 48,
-                              color: AppColors.primary,
-                            ),
-                          ],
+                        duration: const Duration(milliseconds: 180),
+                        width: _isDragging ? 8 : 16,
+                        height: _isDragging ? 3 : 6,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: _isDragging ? 0.15 : 0.4),
+                          borderRadius: BorderRadius.circular(10),
                         ),
                       ),
                     ],
@@ -550,7 +605,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
               ),
             ),
 
-            // Top Search Header
+            // -----------------------------------------------------------------
+            // 3. TOP LOCATION SEARCH HEADER
+            // -----------------------------------------------------------------
             Positioned(
               top: MediaQuery.of(context).padding.top + 12,
               left: 16,
@@ -593,7 +650,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                               });
                             },
                             decoration: InputDecoration(
-                              hintText: 'Search area, street, or landmark...',
+                              hintText: 'Search for your location, street, or landmark...',
                               hintStyle: TextStyle(
                                 fontSize: 13,
                                 color: isDark ? AppColors.darkSubtitle : AppColors.subtitle,
@@ -683,13 +740,14 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
               ),
             ),
 
-            // Map Style Toggle & Zoom Controls
+            // -----------------------------------------------------------------
+            // FLOATING MAP CONTROLS & GPS BUTTON
+            // -----------------------------------------------------------------
             Positioned(
               right: 16,
               bottom: 240,
               child: Column(
                 children: [
-                  // Map Dark / Light Theme Toggle Button
                   FloatingActionButton.small(
                     heroTag: 'map_theme_toggle',
                     onPressed: () {
@@ -710,8 +768,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-
-                  // Satellite Layer Toggle
                   FloatingActionButton.small(
                     heroTag: 'map_layer_toggle',
                     onPressed: () => setState(() => _isSatellite = !_isSatellite),
@@ -751,7 +807,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
               ),
             ),
 
-            // Bottom Delivery Sheet Card
+            // -----------------------------------------------------------------
+            // 6. SELECTED LOCATION CARD (BOTTOM SHEET)
+            // -----------------------------------------------------------------
             Positioned(
               left: 0,
               right: 0,
@@ -784,7 +842,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: const Text(
-                            'SELECT DELIVERY LOCATION',
+                            'SELECTED LOCATION',
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.bold,
@@ -808,9 +866,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                                 Icon(Icons.my_location_rounded, color: AppColors.primary, size: 14),
                                 SizedBox(width: 4),
                                 Text(
-                                  'GPS',
+                                  'Use Current Location',
                                   style: TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 11.5,
                                     fontWeight: FontWeight.bold,
                                     color: AppColors.primary,
                                   ),
@@ -825,6 +883,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
                     Row(
                       children: [
+                        const Icon(Icons.location_on_rounded, color: AppColors.primary, size: 22),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             _areaTitle,
@@ -888,4 +948,19 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       ),
     );
   }
+}
+
+class _PinTriangleClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    path.moveTo(0, 0);
+    path.lineTo(size.width, 0);
+    path.lineTo(size.width / 2, size.height);
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
 }
